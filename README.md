@@ -44,6 +44,18 @@ Probe an OpenAI-compatible endpoint:
 engllm-chat probe-openai-api --base-url http://localhost:11434/v1 --api-key dummy
 ```
 
+Run a repeatable chat workflow smoke test:
+
+```bash
+make smoke-chat
+```
+
+For Ollama specifically, the existing shortcut still works:
+
+```bash
+make smoke-ollama-chat
+```
+
 Hosted-provider configs can use the same chat workflow with provider-specific
 defaults:
 

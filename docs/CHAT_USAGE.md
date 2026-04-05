@@ -238,6 +238,59 @@ engllm-chat interactive . --config chat.yaml \
   --api-base-url http://localhost:11434
 ```
 
+## Repeatable Chat Smoke Test
+
+For a repeatable one-turn workflow check against a configured provider, run:
+
+```bash
+make smoke-chat
+```
+
+That command:
+
+- uses the real shared provider adapter
+- runs one chat turn through the real schema-first workflow
+- fails if the model does not complete the turn
+- fails if the model answers without making at least one tool call
+
+For Ollama specifically, this remains available:
+
+```bash
+make smoke-ollama-chat \
+  OLLAMA_MODEL=qwen2.5-coder:7b-instruct-q4_K_M \
+  OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+To point the generic target at Gemini:
+
+```bash
+export GEMINI_API_KEY=...
+make smoke-chat SMOKE_PROVIDER=gemini SMOKE_MODEL=gemini-2.5-flash
+```
+
+If you want the full structured summary, you can also run the module directly.
+Ollama example:
+
+```bash
+.venv/bin/python -m engllm_chat.smoke_chat \
+  --provider ollama \
+  --directory . \
+  --require-tool-call \
+  --json
+```
+
+Gemini example:
+
+```bash
+export GEMINI_API_KEY=...
+.venv/bin/python -m engllm_chat.smoke_chat \
+  --provider gemini \
+  --model gemini-2.5-flash \
+  --directory . \
+  --require-tool-call \
+  --verbose-llm
+```
+
 ## Hosted Provider Examples
 
 OpenAI:

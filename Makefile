@@ -9,8 +9,14 @@ PACKAGE := engllm_chat
     help setup-venv install-dev \
     format format-check \
     lint typecheck \
-    test coverage \
+    test coverage smoke-chat smoke-ollama-chat \
     package clean ci
+
+OLLAMA_BASE_URL ?= http://127.0.0.1:11434
+OLLAMA_MODEL ?= qwen2.5-coder:7b-instruct-q4_K_M
+SMOKE_PROVIDER ?= ollama
+SMOKE_MODEL ?=
+SMOKE_BASE_URL ?=
 
 help:
 	@echo "engllm-chat Makefile targets:"
@@ -22,6 +28,8 @@ help:
 	@echo "  make typecheck    - Run mypy static checks"
 	@echo "  make test         - Run tests without coverage"
 	@echo "  make coverage     - Run tests with coverage threshold"
+	@echo "  make smoke-chat   - Run the opt-in provider-backed chat workflow smoke test"
+	@echo "  make smoke-ollama-chat - Run the opt-in local Ollama chat workflow smoke test"
 	@echo "  make package      - Build source and wheel"
 	@echo "  make clean        - Remove build artifacts"
 	@echo "  make ci           - Run format-check, lint, typecheck, and one coverage-backed test pass"
@@ -52,6 +60,12 @@ test:
 
 coverage:
 	$(PYTHON) -m pytest -o addopts="" tests --cov=$(PACKAGE) --cov-report=term-missing --cov-fail-under=90
+
+smoke-chat:
+	$(PYTHON) -m engllm_chat.smoke_chat --provider "$(SMOKE_PROVIDER)" --directory . $(if $(SMOKE_MODEL),--model "$(SMOKE_MODEL)") $(if $(SMOKE_BASE_URL),--base-url "$(SMOKE_BASE_URL)") --require-tool-call
+
+smoke-ollama-chat:
+	$(PYTHON) -m engllm_chat.smoke_chat --provider ollama --directory . --model "$(OLLAMA_MODEL)" --base-url "$(OLLAMA_BASE_URL)" --require-tool-call
 
 package:
 	$(PYTHON) -m pip install --upgrade build

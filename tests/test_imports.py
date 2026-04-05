@@ -14,6 +14,7 @@ def test_top_level_modules_import() -> None:
         "engllm_chat.domain",
         "engllm_chat.llm",
         "engllm_chat.prompts.chat",
+        "engllm_chat.smoke_chat",
         "engllm_chat.tools.chat",
     ]
 
