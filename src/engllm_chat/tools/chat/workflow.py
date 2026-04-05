@@ -202,6 +202,7 @@ def _build_tool_definitions() -> list[ChatToolDefinition]:
             name=spec.name,
             description=spec.description,
             input_schema=spec.argument_model.model_json_schema(),
+            argument_model=spec.argument_model,
         )
         for spec in _TOOL_SPECS
     ]

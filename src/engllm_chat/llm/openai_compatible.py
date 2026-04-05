@@ -7,7 +7,7 @@ import os
 import threading
 import urllib.parse
 from collections.abc import Iterator
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
@@ -23,17 +23,22 @@ from engllm_chat.llm.base import (
     ChatTurnResponse,
     ChatTurnStream,
     validate_json_text,
+    validate_payload,
 )
 
 _openai_sdk: Any = None
+_pydantic_function_tool_sdk: Any = None
 try:
     from openai import OpenAI as _OpenAIClient
+    from openai import pydantic_function_tool as _pydantic_function_tool
 
     _openai_sdk = _OpenAIClient
+    _pydantic_function_tool_sdk = _pydantic_function_tool
 except Exception:  # pragma: no cover - optional dependency
     pass
 
 OpenAI: Any = _openai_sdk
+pydantic_function_tool: Any = _pydantic_function_tool_sdk
 
 
 def normalize_ollama_base_url(base_url: str | None) -> str:
@@ -56,17 +61,6 @@ def normalize_ollama_base_url(base_url: str | None) -> str:
 
     normalized = parsed._replace(path=normalized_path, params="", query="", fragment="")
     return urllib.parse.urlunparse(normalized)
-
-
-def _build_response_format(response_model: type[BaseModel]) -> dict[str, object]:
-    schema_name = response_model.__name__.lower()
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": schema_name,
-            "schema": response_model.model_json_schema(),
-        },
-    }
 
 
 def _serialize_chat_message(message: ChatMessage) -> dict[str, object]:
@@ -101,6 +95,20 @@ def _serialize_chat_message(message: ChatMessage) -> dict[str, object]:
 
 
 def _serialize_tool_definition(tool: ChatToolDefinition) -> dict[str, object]:
+    if tool.argument_model is not None:
+        if pydantic_function_tool is None:
+            raise LLMError(
+                "OpenAI SDK dependencies are unavailable. "
+                "Install project dependencies to use hosted providers."
+            )
+        return cast(
+            dict[str, object],
+            pydantic_function_tool(
+                tool.argument_model,
+                name=tool.name,
+                description=tool.description,
+            ),
+        )
     return {
         "type": "function",
         "function": {
@@ -155,6 +163,16 @@ def _extract_token_usage(response: Any) -> ChatTokenUsage | None:
     )
 
 
+def _normalize_parsed_tool_arguments(parsed_arguments: Any) -> dict[str, object] | None:
+    if parsed_arguments is None:
+        return None
+    if isinstance(parsed_arguments, BaseModel):
+        return parsed_arguments.model_dump(mode="json")
+    if isinstance(parsed_arguments, dict):
+        return parsed_arguments
+    return None
+
+
 def _parse_tool_arguments(raw_arguments: Any) -> dict[str, object]:
     if isinstance(raw_arguments, dict):
         return raw_arguments
@@ -184,23 +202,62 @@ def _extract_tool_calls(message: Any) -> list[ChatToolCall]:
         tool_name = getattr(function, "name", None)
         if not isinstance(tool_name, str) or not tool_name.strip():
             raise LLMError("OpenAI-compatible tool call missing function name")
+        parsed_arguments = _normalize_parsed_tool_arguments(
+            getattr(function, "parsed_arguments", None)
+        )
         raw_arguments = getattr(function, "arguments", None)
         tool_calls.append(
             ChatToolCall(
                 call_id=getattr(entry, "id", None) or f"tool-call-{index}",
                 tool_name=tool_name,
-                arguments=_parse_tool_arguments(raw_arguments),
+                arguments=parsed_arguments or _parse_tool_arguments(raw_arguments),
             )
         )
     return tool_calls
 
 
+def _extract_final_response(
+    response_model: type[BaseModel],
+    message: Any,
+) -> tuple[BaseModel, str]:
+    content_text = _extract_message_text(message).strip()
+    parsed = getattr(message, "parsed", None)
+
+    if isinstance(parsed, BaseModel):
+        return parsed, content_text or parsed.model_dump_json()
+    if isinstance(parsed, dict):
+        parsed_model = validate_payload(response_model, parsed)
+        return parsed_model, content_text or parsed_model.model_dump_json()
+    if parsed is not None:
+        parsed_model = response_model.model_validate(parsed)
+        return parsed_model, content_text or parsed_model.model_dump_json()
+    if content_text:
+        return validate_json_text(response_model, content_text), content_text
+    raise LLMError("OpenAI-compatible response missing assistant content")
+
+
 class _StreamingChatResponse(Protocol):
     def __iter__(self) -> Iterator[Any]:
-        """Yield chat completion chunks."""
+        """Yield SDK streaming events."""
 
     def close(self) -> None:
         """Close the underlying stream."""
+
+    def get_final_completion(self) -> Any:
+        """Return the final accumulated parsed completion."""
+
+
+class _StreamingChatResponseManager(Protocol):
+    def __enter__(self) -> _StreamingChatResponse:
+        """Enter the SDK stream manager."""
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        """Close the SDK stream manager."""
 
 
 class _OpenAICompatibleChatTurnStream:
@@ -212,14 +269,15 @@ class _OpenAICompatibleChatTurnStream:
         provider_name: str,
         stream: _StreamingChatResponse,
         response_model: type,
+        stream_manager: _StreamingChatResponseManager | None = None,
     ) -> None:
         self._provider_name = provider_name
         self._stream = stream
+        self._stream_manager = stream_manager
         self._response_model = response_model
         self._cancel_requested = threading.Event()
         self._accumulated_text = ""
         self._closed = False
-        self._tool_call_buffers: dict[int, dict[str, str | None]] = {}
         self._last_usage: ChatTokenUsage | None = None
 
     def cancel(self) -> None:
@@ -235,64 +293,72 @@ class _OpenAICompatibleChatTurnStream:
         | ChatInterruptedEvent
     ]:
         try:
-            for chunk in self._stream:
+            for event in self._stream:
                 if self._cancel_requested.is_set():
                     yield self._build_interrupted_event()
                     return
 
-                usage = _extract_token_usage(chunk)
+                usage = _extract_token_usage(getattr(event, "chunk", event))
                 if usage is not None:
                     self._last_usage = usage
 
-                choices = getattr(chunk, "choices", None)
-                if not isinstance(choices, list) or not choices:
-                    continue
-
-                choice = choices[0]
-                delta = getattr(choice, "delta", None)
-                if delta is not None:
-                    delta_text = _extract_message_text(delta)
-                    if delta_text:
+                if getattr(event, "type", None) == "content.delta":
+                    delta_text = getattr(event, "delta", None)
+                    if isinstance(delta_text, str) and delta_text:
                         self._accumulated_text += delta_text
                         yield ChatAssistantDeltaEvent(
                             delta_text=delta_text,
                             accumulated_text=self._accumulated_text,
                         )
-                    self._accumulate_stream_tool_calls(delta)
 
-                finish_reason = getattr(choice, "finish_reason", None)
-                if finish_reason == "tool_calls":
-                    tool_calls = self._build_stream_tool_calls()
-                    yield ChatToolCallsEvent(
-                        assistant_message=ChatMessage(
-                            role="assistant",
-                            content=self._accumulated_text or None,
-                            tool_calls=tool_calls,
-                        ),
+            if self._cancel_requested.is_set():
+                yield self._build_interrupted_event()
+                return
+
+            final_completion = self._stream.get_final_completion()
+            usage = _extract_token_usage(final_completion)
+            if usage is not None:
+                self._last_usage = usage
+
+            choices = getattr(final_completion, "choices", None)
+            if not isinstance(choices, list) or not choices:
+                raise LLMError(
+                    f"{self._provider_name} stream ended without a final completion."
+                )
+
+            message = getattr(choices[0], "message", None)
+            if message is None:
+                raise LLMError(
+                    f"{self._provider_name} stream ended without an assistant message."
+                )
+
+            tool_calls = _extract_tool_calls(message)
+            if tool_calls:
+                yield ChatToolCallsEvent(
+                    assistant_message=ChatMessage(
+                        role="assistant",
+                        content=_extract_message_text(message).strip() or None,
                         tool_calls=tool_calls,
-                        token_usage=self._last_usage,
-                        raw_text=self._accumulated_text,
-                    )
-                    return
+                    ),
+                    tool_calls=tool_calls,
+                    token_usage=self._last_usage,
+                    raw_text=_extract_message_text(message).strip(),
+                )
+                return
 
-                if finish_reason in {"stop", "length"}:
-                    if not self._accumulated_text:
-                        raise LLMError(
-                            f"{self._provider_name} response missing assistant content"
-                        )
-                    parsed = validate_json_text(
-                        self._response_model, self._accumulated_text
-                    )
-                    yield ChatFinalResponseEvent(
-                        assistant_message=ChatMessage(
-                            role="assistant",
-                            content=self._accumulated_text,
-                        ),
-                        final_response=parsed,
-                        token_usage=self._last_usage,
-                        raw_text=self._accumulated_text,
-                    )
-                    return
+            parsed, raw_text = _extract_final_response(self._response_model, message)
+            if raw_text:
+                self._accumulated_text = raw_text
+            yield ChatFinalResponseEvent(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    content=raw_text,
+                ),
+                final_response=parsed,
+                token_usage=self._last_usage,
+                raw_text=raw_text,
+            )
+            return
         except Exception as exc:  # pragma: no cover - provider/network dependent
             if self._cancel_requested.is_set():
                 yield self._build_interrupted_event()
@@ -302,85 +368,6 @@ class _OpenAICompatibleChatTurnStream:
             ) from exc
         finally:
             self._close_stream()
-
-        if self._cancel_requested.is_set():
-            yield self._build_interrupted_event()
-            return
-
-        if self._tool_call_buffers:
-            tool_calls = self._build_stream_tool_calls()
-            yield ChatToolCallsEvent(
-                assistant_message=ChatMessage(
-                    role="assistant",
-                    content=self._accumulated_text or None,
-                    tool_calls=tool_calls,
-                ),
-                tool_calls=tool_calls,
-                token_usage=self._last_usage,
-                raw_text=self._accumulated_text,
-            )
-            return
-
-        if self._accumulated_text:
-            parsed = validate_json_text(self._response_model, self._accumulated_text)
-            yield ChatFinalResponseEvent(
-                assistant_message=ChatMessage(
-                    role="assistant",
-                    content=self._accumulated_text,
-                ),
-                final_response=parsed,
-                token_usage=self._last_usage,
-                raw_text=self._accumulated_text,
-            )
-            return
-
-        raise LLMError(
-            f"{self._provider_name} stream ended without a final response or tool calls."
-        )
-
-    def _accumulate_stream_tool_calls(self, delta: Any) -> None:
-        raw_tool_calls = getattr(delta, "tool_calls", None)
-        if not isinstance(raw_tool_calls, list):
-            return
-
-        for entry in raw_tool_calls:
-            index = getattr(entry, "index", None)
-            if not isinstance(index, int):
-                index = len(self._tool_call_buffers)
-            buffer = self._tool_call_buffers.setdefault(
-                index,
-                {"id": None, "name": None, "arguments": ""},
-            )
-            entry_id = getattr(entry, "id", None)
-            if isinstance(entry_id, str) and entry_id.strip():
-                buffer["id"] = entry_id
-            function = getattr(entry, "function", None)
-            if function is None:
-                continue
-            name = getattr(function, "name", None)
-            if isinstance(name, str) and name.strip():
-                buffer["name"] = name
-            arguments = getattr(function, "arguments", None)
-            if isinstance(arguments, str):
-                buffer["arguments"] = (buffer["arguments"] or "") + arguments
-
-    def _build_stream_tool_calls(self) -> list[ChatToolCall]:
-        tool_calls: list[ChatToolCall] = []
-        for index in sorted(self._tool_call_buffers):
-            buffer = self._tool_call_buffers[index]
-            name = buffer["name"]
-            if not isinstance(name, str) or not name.strip():
-                raise LLMError(
-                    "OpenAI-compatible streaming tool call missing function name"
-                )
-            tool_calls.append(
-                ChatToolCall(
-                    call_id=buffer["id"] or f"tool-call-{index}",
-                    tool_name=name,
-                    arguments=_parse_tool_arguments(buffer["arguments"]),
-                )
-            )
-        return tool_calls
 
     def _build_interrupted_event(self) -> ChatInterruptedEvent:
         return ChatInterruptedEvent(
@@ -398,7 +385,10 @@ class _OpenAICompatibleChatTurnStream:
         if self._closed:
             return
         try:
-            self._stream.close()
+            if self._stream_manager is not None:
+                self._stream_manager.__exit__(None, None, None)
+            else:
+                self._stream.close()
         except Exception:
             pass
         self._closed = True
@@ -446,14 +436,14 @@ class OpenAICompatibleChatLLMClient:
                 _serialize_chat_message(message) for message in request.messages
             ],
             "temperature": request.temperature,
-            "response_format": _build_response_format(request.response_model),
+            "response_format": request.response_model,
         }
         if request.tools:
             payload["tools"] = [
                 _serialize_tool_definition(tool) for tool in request.tools
             ]
         try:
-            response = self._client.chat.completions.create(**payload)
+            response = self._client.beta.chat.completions.parse(**payload)
         except Exception as exc:  # pragma: no cover - provider/network dependent
             raise LLMError(f"{self._provider_name} request failed: {exc}") from exc
 
@@ -467,10 +457,10 @@ class OpenAICompatibleChatLLMClient:
             raise LLMError(f"{self._provider_name} response missing message")
 
         tool_calls = _extract_tool_calls(message)
-        content_text = _extract_message_text(message).strip()
         token_usage = _extract_token_usage(response)
 
         if tool_calls:
+            content_text = _extract_message_text(message).strip()
             return ChatTurnResponse(
                 assistant_message=ChatMessage(
                     role="assistant",
@@ -483,10 +473,7 @@ class OpenAICompatibleChatLLMClient:
                 finish_reason="tool_calls",
             )
 
-        if not content_text:
-            raise LLMError(f"{self._provider_name} response missing assistant content")
-
-        parsed = validate_json_text(request.response_model, content_text)
+        parsed, content_text = _extract_final_response(request.response_model, message)
         return ChatTurnResponse(
             assistant_message=ChatMessage(role="assistant", content=content_text),
             final_response=parsed,
@@ -504,16 +491,16 @@ class OpenAICompatibleChatLLMClient:
                 _serialize_chat_message(message) for message in request.messages
             ],
             "temperature": request.temperature,
-            "stream": True,
             "stream_options": {"include_usage": True},
-            "response_format": _build_response_format(request.response_model),
+            "response_format": request.response_model,
         }
         if request.tools:
             payload["tools"] = [
                 _serialize_tool_definition(tool) for tool in request.tools
             ]
         try:
-            stream = self._client.chat.completions.create(**payload)
+            stream_manager = self._client.beta.chat.completions.stream(**payload)
+            stream = stream_manager.__enter__()
         except Exception as exc:  # pragma: no cover - provider/network dependent
             raise LLMError(
                 f"{self._provider_name} streaming request failed: {exc}"
@@ -522,4 +509,5 @@ class OpenAICompatibleChatLLMClient:
             provider_name=self._provider_name,
             stream=stream,
             response_model=request.response_model,
+            stream_manager=stream_manager,
         )

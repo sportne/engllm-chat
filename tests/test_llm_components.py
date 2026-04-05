@@ -37,18 +37,38 @@ class _SimpleModel(BaseModel):
     value: int
 
 
+class _ReadFileArgs(BaseModel):
+    path: str
+
+
 class _FakeFunction:
-    def __init__(self, name: str, arguments: str | dict[str, object]) -> None:
+    def __init__(
+        self,
+        name: str,
+        arguments: str | dict[str, object],
+        *,
+        parsed_arguments: object | None = None,
+    ) -> None:
         self.name = name
         self.arguments = arguments
+        self.parsed_arguments = parsed_arguments
 
 
 class _FakeToolCall:
     def __init__(
-        self, call_id: str, name: str, arguments: str | dict[str, object]
+        self,
+        call_id: str,
+        name: str,
+        arguments: str | dict[str, object],
+        *,
+        parsed_arguments: object | None = None,
     ) -> None:
         self.id = call_id
-        self.function = _FakeFunction(name, arguments)
+        self.function = _FakeFunction(
+            name,
+            arguments,
+            parsed_arguments=parsed_arguments,
+        )
 
 
 class _FakeMessage:
@@ -57,9 +77,11 @@ class _FakeMessage:
         *,
         content: str | None = None,
         tool_calls: list[_FakeToolCall] | None = None,
+        parsed: object | None = None,
     ) -> None:
         self.content = content
         self.tool_calls = tool_calls or []
+        self.parsed = parsed
 
 
 class _FakeChoice:
@@ -91,79 +113,84 @@ class _FakeUsage:
         self.total_tokens = total_tokens
 
 
-class _FakeDeltaFunction:
-    def __init__(self, name: str | None = None, arguments: str | None = None) -> None:
-        self.name = name
-        self.arguments = arguments
-
-
-class _FakeDeltaToolCall:
+class _FakeStreamingEvent:
     def __init__(
         self,
+        event_type: str,
         *,
-        index: int,
-        call_id: str | None = None,
-        name: str | None = None,
-        arguments: str | None = None,
+        delta: str | None = None,
+        chunk: object | None = None,
     ) -> None:
-        self.index = index
-        self.id = call_id
-        self.function = _FakeDeltaFunction(name=name, arguments=arguments)
-
-
-class _FakeDelta:
-    def __init__(
-        self,
-        *,
-        content: str | None = None,
-        tool_calls: list[_FakeDeltaToolCall] | None = None,
-    ) -> None:
-        self.content = content
-        self.tool_calls = tool_calls or []
-
-
-class _FakeStreamingChoice:
-    def __init__(self, delta: _FakeDelta, finish_reason: str | None = None) -> None:
+        self.type = event_type
         self.delta = delta
-        self.finish_reason = finish_reason
-
-
-class _FakeStreamingChunk:
-    def __init__(
-        self,
-        *,
-        delta: _FakeDelta | None = None,
-        finish_reason: str | None = None,
-        usage: object | None = None,
-        include_choices: bool = True,
-    ) -> None:
-        self.usage = usage
-        self.choices = (
-            [_FakeStreamingChoice(delta or _FakeDelta(), finish_reason=finish_reason)]
-            if include_choices
-            else []
-        )
+        self.chunk = chunk
 
 
 class _FakeStreamingResponse:
-    def __init__(self, chunks: list[_FakeStreamingChunk]) -> None:
-        self._chunks = chunks
+    def __init__(
+        self,
+        *,
+        events: list[_FakeStreamingEvent],
+        final_completion: object,
+    ) -> None:
+        self._events = events
+        self._final_completion = final_completion
         self.closed = False
 
     def __iter__(self):
-        yield from self._chunks
+        yield from self._events
 
     def close(self) -> None:
         self.closed = True
 
+    def get_final_completion(self) -> object:
+        return self._final_completion
+
+
+class _FakeStreamingManager:
+    def __init__(self, stream: _FakeStreamingResponse) -> None:
+        self.stream = stream
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self) -> _FakeStreamingResponse:
+        self.entered = True
+        return self.stream
+
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
+        del exc_type, exc, exc_tb
+        self.exited = True
+        self.stream.close()
+
 
 class _FakeOpenAIClient:
     last_init_kwargs: dict[str, object] | None = None
-    queued_responses: list[object] = []
-    captured_payloads: list[dict[str, object]] = []
+    queued_parse_responses: list[object] = []
+    queued_stream_managers: list[_FakeStreamingManager] = []
+    captured_parse_payloads: list[dict[str, object]] = []
+    captured_stream_payloads: list[dict[str, object]] = []
 
     def __init__(self, **kwargs: object) -> None:
         type(self).last_init_kwargs = dict(kwargs)
+        completions = type(
+            "_BetaCompletionsNamespace",
+            (),
+            {
+                "parse": self._parse,
+                "stream": self._stream,
+            },
+        )()
+        self.beta = type(
+            "_BetaNamespace",
+            (),
+            {
+                "chat": type(
+                    "_BetaChatNamespace",
+                    (),
+                    {"completions": completions},
+                )()
+            },
+        )()
         self.chat = type(
             "_ChatNamespace",
             (),
@@ -171,7 +198,7 @@ class _FakeOpenAIClient:
                 "completions": type(
                     "_CompletionsNamespace",
                     (),
-                    {"create": self._create},
+                    {"create": self._unexpected_create},
                 )()
             },
         )()
@@ -179,14 +206,26 @@ class _FakeOpenAIClient:
     @classmethod
     def reset(cls) -> None:
         cls.last_init_kwargs = None
-        cls.queued_responses = []
-        cls.captured_payloads = []
+        cls.queued_parse_responses = []
+        cls.queued_stream_managers = []
+        cls.captured_parse_payloads = []
+        cls.captured_stream_payloads = []
 
-    def _create(self, **payload: object) -> object:
-        type(self).captured_payloads.append(dict(payload))
-        if not type(self).queued_responses:
-            raise AssertionError("No queued fake OpenAI response")
-        return type(self).queued_responses.pop(0)
+    def _unexpected_create(self, **payload: object) -> object:
+        del payload
+        raise AssertionError("Raw chat.completions.create should not be used")
+
+    def _parse(self, **payload: object) -> object:
+        type(self).captured_parse_payloads.append(dict(payload))
+        if not type(self).queued_parse_responses:
+            raise AssertionError("No queued fake parsed response")
+        return type(self).queued_parse_responses.pop(0)
+
+    def _stream(self, **payload: object) -> _FakeStreamingManager:
+        type(self).captured_stream_payloads.append(dict(payload))
+        if not type(self).queued_stream_managers:
+            raise AssertionError("No queued fake streaming manager")
+        return type(self).queued_stream_managers.pop(0)
 
 
 def test_validate_payload_and_json_text() -> None:
@@ -393,9 +432,12 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
-    _FakeOpenAIClient.queued_responses = [
+    _FakeOpenAIClient.queued_parse_responses = [
         _FakeChatCompletionResponse(
-            message=_FakeMessage(content='{"answer":"Hosted done"}'),
+            message=_FakeMessage(
+                content="Hosted done",
+                parsed=ChatFinalResponse(answer="Hosted done"),
+            ),
             usage=_FakeUsage(prompt_tokens=3, completion_tokens=5, total_tokens=8),
         )
     ]
@@ -420,27 +462,48 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
     assert response.final_response == ChatFinalResponse(answer="Hosted done")
     assert response.token_usage is not None
     assert response.token_usage.total_tokens == 8
-    assert _FakeOpenAIClient.captured_payloads[-1]["model"] == "gpt-test"
-    assert _FakeOpenAIClient.captured_payloads[-1]["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "chatfinalresponse",
-            "schema": ChatFinalResponse.model_json_schema(),
-        },
-    }
+    assert response.raw_text == "Hosted done"
+    assert _FakeOpenAIClient.captured_parse_payloads[-1]["model"] == "gpt-test"
+    assert (
+        _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"]
+        is ChatFinalResponse
+    )
 
 
 def test_openai_compatible_generate_chat_turn_parses_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    tool_builder_calls: list[tuple[type[BaseModel], str, str]] = []
+
+    def _fake_pydantic_function_tool(
+        model: type[BaseModel],
+        *,
+        name: str,
+        description: str,
+    ) -> dict[str, object]:
+        tool_builder_calls.append((model, name, description))
+        return {
+            "type": "function",
+            "function": {"name": name, "description": description, "strict": True},
+        }
+
+    monkeypatch.setattr(
+        "engllm_chat.llm.openai_compatible.pydantic_function_tool",
+        _fake_pydantic_function_tool,
+    )
     _FakeOpenAIClient.reset()
-    _FakeOpenAIClient.queued_responses = [
+    _FakeOpenAIClient.queued_parse_responses = [
         _FakeChatCompletionResponse(
             message=_FakeMessage(
                 content="",
                 tool_calls=[
-                    _FakeToolCall("call-1", "read_file", '{"path":"README.md"}')
+                    _FakeToolCall(
+                        "call-1",
+                        "read_file",
+                        '{"path":"README.md"}',
+                        parsed_arguments=_ReadFileArgs(path="README.md"),
+                    )
                 ],
             )
         )
@@ -468,6 +531,7 @@ def test_openai_compatible_generate_chat_turn_parses_tool_calls(
                         "properties": {"path": {"type": "string"}},
                         "required": ["path"],
                     },
+                    argument_model=_ReadFileArgs,
                 )
             ],
         )
@@ -476,51 +540,53 @@ def test_openai_compatible_generate_chat_turn_parses_tool_calls(
     assert response.finish_reason == "tool_calls"
     assert response.tool_calls[0].tool_name == "read_file"
     assert response.tool_calls[0].arguments == {"path": "README.md"}
+    assert tool_builder_calls == [(_ReadFileArgs, "read_file", "Read one file")]
+    assert _FakeOpenAIClient.captured_parse_payloads[-1]["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read one file",
+                "strict": True,
+            },
+        }
+    ]
 
 
-def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel(
+def test_openai_compatible_stream_chat_turn_supports_final_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
     final_stream = _FakeStreamingResponse(
-        [
-            _FakeStreamingChunk(delta=_FakeDelta(content='{"answer":"Hello')),
-            _FakeStreamingChunk(
-                delta=_FakeDelta(content=' world"}'),
-                finish_reason="stop",
-                usage=_FakeUsage(prompt_tokens=2, completion_tokens=4, total_tokens=6),
-            ),
-        ]
-    )
-    tool_stream = _FakeStreamingResponse(
-        [
-            _FakeStreamingChunk(
-                delta=_FakeDelta(
-                    tool_calls=[
-                        _FakeDeltaToolCall(
-                            index=0,
-                            call_id="call-1",
-                            name="search_text",
-                            arguments='{"query":"',
+        events=[
+            _FakeStreamingEvent("content.delta", delta="Hello"),
+            _FakeStreamingEvent(
+                "content.delta",
+                delta=" world",
+                chunk=type(
+                    "_Chunk",
+                    (),
+                    {
+                        "usage": _FakeUsage(
+                            prompt_tokens=2,
+                            completion_tokens=4,
+                            total_tokens=6,
                         )
-                    ]
-                )
+                    },
+                )(),
             ),
-            _FakeStreamingChunk(
-                delta=_FakeDelta(
-                    tool_calls=[_FakeDeltaToolCall(index=0, arguments='TODO"}')]
-                ),
-                finish_reason="tool_calls",
+        ],
+        final_completion=_FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="Hello world",
+                parsed=ChatFinalResponse(answer="Hello world"),
             ),
-        ]
+            usage=_FakeUsage(prompt_tokens=2, completion_tokens=4, total_tokens=6),
+        ),
     )
-    cancel_stream = _FakeStreamingResponse(
-        [
-            _FakeStreamingChunk(delta=_FakeDelta(content="partial")),
-        ]
-    )
-    _FakeOpenAIClient.queued_responses = [final_stream, tool_stream, cancel_stream]
+    final_manager = _FakeStreamingManager(final_stream)
+    _FakeOpenAIClient.queued_stream_managers = [final_manager]
 
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
@@ -542,13 +608,48 @@ def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel
     assert isinstance(final_events[0], ChatAssistantDeltaEvent)
     assert isinstance(final_events[-1], ChatFinalResponseEvent)
     assert final_events[-1].final_response == ChatFinalResponse(answer="Hello world")
-    assert _FakeOpenAIClient.captured_payloads[0]["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "chatfinalresponse",
-            "schema": ChatFinalResponse.model_json_schema(),
-        },
+    assert (
+        _FakeOpenAIClient.captured_stream_payloads[0]["response_format"]
+        is ChatFinalResponse
+    )
+    assert _FakeOpenAIClient.captured_stream_payloads[0]["stream_options"] == {
+        "include_usage": True
     }
+    assert final_manager.entered is True
+    assert final_manager.exited is True
+    assert final_stream.closed is True
+
+
+def test_openai_compatible_stream_chat_turn_supports_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    tool_stream = _FakeStreamingResponse(
+        events=[_FakeStreamingEvent("content.delta", delta="Searching...")],
+        final_completion=_FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="Searching...",
+                tool_calls=[
+                    _FakeToolCall(
+                        "call-1",
+                        "search_text",
+                        '{"query":"TODO"}',
+                        parsed_arguments={"query": "TODO"},
+                    )
+                ],
+            )
+        ),
+    )
+    _FakeOpenAIClient.queued_stream_managers = [_FakeStreamingManager(tool_stream)]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="gemini",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
 
     tool_events = list(
         client.stream_chat_turn(
@@ -559,9 +660,36 @@ def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel
             )
         )
     )
+    assert isinstance(tool_events[0], ChatAssistantDeltaEvent)
     assert isinstance(tool_events[-1], ChatToolCallsEvent)
     assert tool_events[-1].tool_calls[0].tool_name == "search_text"
     assert tool_events[-1].tool_calls[0].arguments == {"query": "TODO"}
+
+
+def test_openai_compatible_stream_chat_turn_supports_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    cancel_stream = _FakeStreamingResponse(
+        events=[_FakeStreamingEvent("content.delta", delta="partial")],
+        final_completion=_FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="unused",
+                parsed=ChatFinalResponse(answer="unused"),
+            )
+        ),
+    )
+    cancel_manager = _FakeStreamingManager(cancel_stream)
+    _FakeOpenAIClient.queued_stream_managers = [cancel_manager]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="gemini",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
 
     interrupted = client.stream_chat_turn(
         ChatTurnRequest(
@@ -574,14 +702,18 @@ def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel
     interrupted_events = list(interrupted)
     assert isinstance(interrupted_events[-1], ChatInterruptedEvent)
     assert cancel_stream.closed is True
+    assert cancel_manager.exited is True
 
 
 def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
-    _FakeOpenAIClient.queued_responses = [
+    _FakeOpenAIClient.queued_parse_responses = [
         _FakeChatCompletionResponse(
-            message=_FakeMessage(content='{"answer":"Done","citations":[]}'),
+            message=_FakeMessage(
+                content="Done",
+                parsed=ChatFinalResponse(answer="Done"),
+            ),
             usage=_FakeUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10),
         )
     ]
@@ -607,16 +739,27 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
     assert _FakeOpenAIClient.last_init_kwargs is not None
     assert _FakeOpenAIClient.last_init_kwargs["base_url"] == "http://localhost:11434/v1"
     assert _FakeOpenAIClient.last_init_kwargs["api_key"] == "ollama"
+    assert (
+        _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"]
+        is ChatFinalResponse
+    )
 
 
 def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
-    _FakeOpenAIClient.queued_responses = [
+    _FakeOpenAIClient.queued_parse_responses = [
         _FakeChatCompletionResponse(
             message=_FakeMessage(
                 content="",
-                tool_calls=[_FakeToolCall("call-1", "list_directory", '{"path":"."}')],
+                tool_calls=[
+                    _FakeToolCall(
+                        "call-1",
+                        "list_directory",
+                        '{"path":"."}',
+                        parsed_arguments={"path": "."},
+                    )
+                ],
             )
         )
     ]
@@ -643,21 +786,28 @@ def test_ollama_stream_chat_turn_supports_final_and_cancel(monkeypatch) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
     final_stream = _FakeStreamingResponse(
-        [
-            _FakeStreamingChunk(delta=_FakeDelta(content='{"answer":"Hi"')),
-            _FakeStreamingChunk(
-                delta=_FakeDelta(content="}"),
-                finish_reason="stop",
-                usage=_FakeUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        events=[_FakeStreamingEvent("content.delta", delta="Hi")],
+        final_completion=_FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="Hi",
+                parsed=ChatFinalResponse(answer="Hi"),
             ),
-        ]
+            usage=_FakeUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        ),
     )
     cancel_stream = _FakeStreamingResponse(
-        [
-            _FakeStreamingChunk(delta=_FakeDelta(content="partial")),
-        ]
+        events=[_FakeStreamingEvent("content.delta", delta="partial")],
+        final_completion=_FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="unused",
+                parsed=ChatFinalResponse(answer="unused"),
+            )
+        ),
     )
-    _FakeOpenAIClient.queued_responses = [final_stream, cancel_stream]
+    _FakeOpenAIClient.queued_stream_managers = [
+        _FakeStreamingManager(final_stream),
+        _FakeStreamingManager(cancel_stream),
+    ]
     client = OpenAICompatibleChatLLMClient(
         model_name="qwen",
         provider_name="ollama",

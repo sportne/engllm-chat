@@ -42,6 +42,7 @@ class ChatToolDefinition:
     name: str
     description: str
     input_schema: dict[str, object]
+    argument_model: type[BaseModel] | None = None
 
 
 @dataclass(frozen=True)

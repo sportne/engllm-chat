@@ -337,17 +337,19 @@ def test_ollama_client_uses_openai_compatible_transport(
 
         def __init__(self, **kwargs: object) -> None:
             type(self).last_init_kwargs = dict(kwargs)
-            self.chat = SimpleNamespace(
-                completions=SimpleNamespace(create=self._create)
+            self.beta = SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(parse=self._parse))
             )
 
-        def _create(self, **payload: object) -> object:
+        def _parse(self, **payload: object) -> object:
             type(self).captured_payloads.append(dict(payload))
             return SimpleNamespace(
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content='{"answer":"Done"}', tool_calls=[]
+                            content="Done",
+                            tool_calls=[],
+                            parsed=ChatFinalResponse(answer="Done"),
                         )
                     )
                 ],
@@ -384,8 +386,7 @@ def test_ollama_client_uses_openai_compatible_transport(
         "timeout": 60.0,
     }
     assert (
-        _FakeOpenAIClient.captured_payloads[-1]["response_format"]["type"]
-        == "json_schema"
+        _FakeOpenAIClient.captured_payloads[-1]["response_format"] is ChatFinalResponse
     )
 
 
@@ -398,31 +399,51 @@ def test_ollama_stream_cancel_closes_openai_compatible_stream(
 
         def __iter__(self):
             yield SimpleNamespace(
-                usage=None,
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(content="partial", tool_calls=[]),
-                        finish_reason=None,
-                    )
-                ],
+                type="content.delta",
+                delta="partial",
+                chunk=SimpleNamespace(usage=None),
             )
 
         def close(self) -> None:
             self.closed = True
+
+        def get_final_completion(self) -> object:
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="unused",
+                            parsed=ChatFinalResponse(answer="unused"),
+                            tool_calls=[],
+                        )
+                    )
+                ]
+            )
+
+    class _FakeStreamingManager:
+        def __init__(self, stream: _FakeStreamingResponse) -> None:
+            self.stream = stream
+
+        def __enter__(self) -> _FakeStreamingResponse:
+            return self.stream
+
+        def __exit__(self, exc_type, exc, exc_tb) -> None:
+            del exc_type, exc, exc_tb
+            self.stream.close()
 
     class _FakeOpenAIClient:
         last_stream: _FakeStreamingResponse | None = None
 
         def __init__(self, **kwargs: object) -> None:
             del kwargs
-            self.chat = SimpleNamespace(
-                completions=SimpleNamespace(create=self._create)
+            self.beta = SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(stream=self._stream))
             )
 
-        def _create(self, **payload: object) -> object:
+        def _stream(self, **payload: object) -> object:
             del payload
             type(self).last_stream = _FakeStreamingResponse()
-            return type(self).last_stream
+            return _FakeStreamingManager(type(self).last_stream)
 
     monkeypatch.setattr(openai_compatible_module, "OpenAI", _FakeOpenAIClient)
 
@@ -503,6 +524,14 @@ def test_openai_compatible_helpers_cover_serialization_and_stream_fallbacks() ->
     assert usage.output_tokens == 2
     assert usage.total_tokens == 2
 
+    assert openai_compatible_module._normalize_parsed_tool_arguments(
+        FindFilesArgs(path=".", pattern="*.py")
+    ) == {"path": ".", "pattern": "*.py"}
+    assert openai_compatible_module._normalize_parsed_tool_arguments(
+        {"path": "README.md"}
+    ) == {"path": "README.md"}
+    assert openai_compatible_module._normalize_parsed_tool_arguments(["bad"]) is None
+
     assert openai_compatible_module._parse_tool_arguments({"path": "README.md"}) == {
         "path": "README.md"
     }
@@ -520,36 +549,70 @@ def test_openai_compatible_helpers_cover_serialization_and_stream_fallbacks() ->
             )
         )
 
+    parsed_model, parsed_raw_text = openai_compatible_module._extract_final_response(
+        ChatFinalResponse,
+        SimpleNamespace(
+            content="plain answer", parsed=ChatFinalResponse(answer="Done")
+        ),
+    )
+    assert parsed_model == ChatFinalResponse(answer="Done")
+    assert parsed_raw_text == "plain answer"
+
+    dict_model, dict_raw_text = openai_compatible_module._extract_final_response(
+        ChatFinalResponse,
+        SimpleNamespace(content="", parsed={"answer": "From dict"}),
+    )
+    assert dict_model == ChatFinalResponse(answer="From dict")
+    assert dict_raw_text == dict_model.model_dump_json()
+
+    json_model, json_raw_text = openai_compatible_module._extract_final_response(
+        ChatFinalResponse,
+        SimpleNamespace(content='{"answer":"From JSON"}', parsed=None),
+    )
+    assert json_model == ChatFinalResponse(answer="From JSON")
+    assert json_raw_text == '{"answer":"From JSON"}'
+
     class _Stream:
-        def __init__(self, chunks):
-            self._chunks = chunks
+        def __init__(self, events, final_completion):
+            self._events = events
+            self._final_completion = final_completion
             self.closed = False
 
         def __iter__(self):
-            yield from self._chunks
+            yield from self._events
 
         def close(self):
             self.closed = True
+
+        def get_final_completion(self):
+            return self._final_completion
 
     final_stream = openai_compatible_module._OpenAICompatibleChatTurnStream(
         provider_name="openai",
         stream=_Stream(
             [
-                SimpleNamespace(choices=[]),
                 SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            delta=SimpleNamespace(content='{"answer":"Hi"}'),
-                            finish_reason=None,
-                        )
-                    ],
-                    usage=None,
+                    type="content.delta",
+                    delta="Hi",
+                    chunk=SimpleNamespace(usage=None),
                 ),
-            ]
+            ],
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Hi",
+                            parsed=ChatFinalResponse(answer="Hi"),
+                            tool_calls=[],
+                        )
+                    )
+                ]
+            ),
         ),
         response_model=ChatFinalResponse,
     )
     final_events = list(final_stream)
+    assert isinstance(final_events[0], ChatAssistantDeltaEvent)
     assert isinstance(final_events[-1], ChatFinalResponseEvent)
 
     tool_stream = openai_compatible_module._OpenAICompatibleChatTurnStream(
@@ -557,37 +620,42 @@ def test_openai_compatible_helpers_cover_serialization_and_stream_fallbacks() ->
         stream=_Stream(
             [
                 SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            delta=SimpleNamespace(
-                                content=None,
-                                tool_calls=[
-                                    SimpleNamespace(
-                                        index=0,
-                                        id="call-1",
-                                        function=SimpleNamespace(
-                                            name="search_text",
-                                            arguments='{"query":"TODO"}',
-                                        ),
-                                    )
-                                ],
-                            ),
-                            finish_reason=None,
-                        )
-                    ],
-                    usage=None,
+                    type="content.delta",
+                    delta="Searching...",
+                    chunk=SimpleNamespace(usage=None),
                 )
-            ]
+            ],
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="Searching...",
+                            parsed=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    id="call-1",
+                                    function=SimpleNamespace(
+                                        name="search_text",
+                                        arguments='{"query":"TODO"}',
+                                        parsed_arguments={"query": "TODO"},
+                                    ),
+                                )
+                            ],
+                        )
+                    )
+                ]
+            ),
         ),
         response_model=ChatFinalResponse,
     )
     tool_events = list(tool_stream)
+    assert isinstance(tool_events[0], ChatAssistantDeltaEvent)
     assert isinstance(tool_events[-1], ChatToolCallsEvent)
 
     empty_stream = openai_compatible_module._OpenAICompatibleChatTurnStream(
         provider_name="openai",
-        stream=_Stream([]),
+        stream=_Stream([], SimpleNamespace(choices=[])),
         response_model=ChatFinalResponse,
     )
-    with pytest.raises(Exception, match="ended without a final response or tool calls"):
+    with pytest.raises(Exception, match="ended without a final completion"):
         list(empty_stream)
