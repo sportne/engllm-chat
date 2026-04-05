@@ -2,34 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel
 
 from engllm_chat.domain.models import ChatFinalResponse, ChatToolLimits
+from engllm_chat.llm.base import ChatToolDefinition
 from engllm_chat.prompts.chat.templates import CHAT_SYSTEM_PROMPT_PREAMBLE
-
-_TOOL_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
-    ("list_directory", "List immediate children of one directory."),
-    (
-        "list_directory_recursive",
-        "List one directory subtree as a flat depth-first result.",
-    ),
-    ("find_files", "Find files by root-relative glob pattern."),
-    (
-        "search_text",
-        "Search readable file content for a literal substring in one directory tree "
-        "or one file.",
-    ),
-    (
-        "get_file_info",
-        "Inspect one file or a small batch of files before deciding whether or how "
-        "to read them.",
-    ),
-    (
-        "read_file",
-        "Read text or converted markdown content, optionally using "
-        "start_char/end_char.",
-    ),
-)
 
 _FIELD_GUIDANCE: dict[str, str] = {
     "answer": "Main grounded answer. Keep it concise and avoid unsupported claims.",
@@ -53,15 +32,48 @@ _FIELD_GUIDANCE: dict[str, str] = {
 _DEFAULT_FIELD_GUIDANCE = "Return a valid value that matches the response schema."
 
 
+def _default_chat_tools() -> list[ChatToolDefinition]:
+    from engllm_chat.tools.chat.registry import build_chat_tool_definitions
+
+    return build_chat_tool_definitions()
+
+
+def _strip_schema_titles(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _strip_schema_titles(item)
+            for key, item in value.items()
+            if key != "title"
+        }
+    if isinstance(value, list):
+        return [_strip_schema_titles(item) for item in value]
+    return value
+
+
+def _serialize_openai_function_tool(tool: ChatToolDefinition) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": _strip_schema_titles(tool.input_schema),
+        },
+    }
+
+
 def build_chat_system_prompt(
     *,
     tool_limits: ChatToolLimits,
     response_model: type[BaseModel] = ChatFinalResponse,
+    tools: list[ChatToolDefinition] | None = None,
 ) -> str:
     """Return the interactive chat system prompt."""
 
-    tool_catalog = "\n".join(
-        f"- {tool_name}: {description}" for tool_name, description in _TOOL_DESCRIPTIONS
+    resolved_tools = tools if tools is not None else _default_chat_tools()
+    tool_catalog = json.dumps(
+        [_serialize_openai_function_tool(tool) for tool in resolved_tools],
+        indent=2,
+        sort_keys=True,
     )
     usage_examples = "\n".join(
         (
@@ -130,6 +142,10 @@ def build_chat_system_prompt(
     return (
         f"{CHAT_SYSTEM_PROMPT_PREAMBLE}\n\n"
         "Available tools:\n"
+        "- Treat the following tool catalog like an OpenAI native function-tools "
+        "array.\n"
+        "- Each tool has a function name, a description, and a JSON-schema "
+        "parameters object.\n"
         f"{tool_catalog}\n\n"
         "Required action format:\n"
         "- On every turn, return exactly one structured action.\n"
@@ -138,6 +154,8 @@ def build_chat_system_prompt(
         "- If you can answer, return action.kind='final_response' with response "
         "matching the final-answer schema.\n"
         "- Request at most one tool per turn.\n"
+        "- Choose tool_name exactly from the function.name values above, and make "
+        "arguments match the corresponding function.parameters schema.\n"
         "- Tool results will be supplied back to you as plain conversation "
         "messages; use them before deciding the next action.\n\n"
         "Tool usage examples:\n"

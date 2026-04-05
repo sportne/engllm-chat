@@ -35,6 +35,7 @@ from engllm_chat.tools.chat.models import (
     ReadFileArgs,
     SearchTextArgs,
 )
+from engllm_chat.tools.chat.registry import build_chat_tool_definitions
 from engllm_chat.tools.chat.workflow import (
     run_chat_session_turn,
     run_chat_turn,
@@ -102,7 +103,10 @@ class _RecordingChatClient:
 
 
 def test_build_chat_system_prompt_includes_tool_catalog_and_examples() -> None:
-    prompt = build_chat_system_prompt(tool_limits=ChatToolLimits())
+    prompt = build_chat_system_prompt(
+        tool_limits=ChatToolLimits(),
+        tools=build_chat_tool_definitions(),
+    )
 
     for tool_name in (
         "list_directory",
@@ -114,6 +118,10 @@ def test_build_chat_system_prompt_includes_tool_catalog_and_examples() -> None:
     ):
         assert tool_name in prompt
 
+    assert '"type": "function"' in prompt
+    assert '"function": {' in prompt
+    assert '"parameters": {' in prompt
+    assert '"description": "List immediate children of one directory."' in prompt
     assert "find_files(path='src', pattern='**/*.py')" in prompt
     assert "search_text(path='.', query='provider')" in prompt
     assert "get_file_info(path='src/app.py')" in prompt
@@ -123,7 +131,10 @@ def test_build_chat_system_prompt_includes_tool_catalog_and_examples() -> None:
 
 
 def test_build_chat_system_prompt_mentions_ground_rules_and_final_response() -> None:
-    prompt = build_chat_system_prompt(tool_limits=ChatToolLimits())
+    prompt = build_chat_system_prompt(
+        tool_limits=ChatToolLimits(),
+        tools=build_chat_tool_definitions(),
+    )
 
     assert "All tool paths are relative to the configured root." in prompt
     assert "Tool outputs are authoritative over guesses." in prompt
@@ -131,6 +142,8 @@ def test_build_chat_system_prompt_mentions_ground_rules_and_final_response() -> 
     assert "return exactly one structured action" in prompt
     assert "action.kind='tool_request'" in prompt
     assert "Request at most one tool per turn." in prompt
+    assert "OpenAI native function-tools array" in prompt
+    assert "function.name values above" in prompt
     assert "path must never be blank" in prompt
     assert "Use path='.' to operate on the entire configured root." in prompt
     assert "find_files for matching file paths or file names" in prompt
@@ -163,10 +176,12 @@ def test_build_chat_system_prompt_is_deterministic_and_includes_limits() -> None
     first = build_chat_system_prompt(
         tool_limits=limits,
         response_model=ChatFinalResponse,
+        tools=build_chat_tool_definitions(),
     )
     second = build_chat_system_prompt(
         tool_limits=limits,
         response_model=ChatFinalResponse,
+        tools=build_chat_tool_definitions(),
     )
 
     assert first == second
@@ -988,7 +1003,10 @@ def test_run_chat_session_turn_populates_session_and_active_context_tokens(
     active_context_messages = [
         ChatMessage(
             role="system",
-            content=build_chat_system_prompt(tool_limits=ChatToolLimits()),
+            content=build_chat_system_prompt(
+                tool_limits=ChatToolLimits(),
+                tools=build_chat_tool_definitions(),
+            ),
         ),
         *(
             message
@@ -1035,7 +1053,12 @@ def test_run_chat_session_turn_truncates_oldest_whole_turns_when_context_is_too_
         llm_client=client,
     )
     system_tokens = len(
-        tokenize(build_chat_system_prompt(tool_limits=ChatToolLimits()))
+        tokenize(
+            build_chat_system_prompt(
+                tool_limits=ChatToolLimits(),
+                tools=build_chat_tool_definitions(),
+            )
+        )
     )
     config = ChatConfig.model_validate(
         {"session": {"max_context_tokens": system_tokens + 1}}
@@ -1099,7 +1122,10 @@ def test_run_chat_session_turn_does_not_truncate_when_candidate_context_exactly_
     candidate_messages = [
         ChatMessage(
             role="system",
-            content=build_chat_system_prompt(tool_limits=ChatToolLimits()),
+            content=build_chat_system_prompt(
+                tool_limits=ChatToolLimits(),
+                tools=build_chat_tool_definitions(),
+            ),
         ),
         *retained_messages,
         ChatMessage(role="user", content="beta"),

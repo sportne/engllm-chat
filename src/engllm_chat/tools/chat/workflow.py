@@ -3,21 +3,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator
 from pathlib import Path
 from threading import Lock
 
-from pydantic import ValidationError as PydanticValidationError
-
-from engllm_chat.core.chat import (
-    find_files,
-    get_file_info,
-    list_directory,
-    list_directory_recursive,
-    read_file,
-    search_text,
-)
 from engllm_chat.core.tokenize import tokenize
 from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import (
@@ -25,13 +14,10 @@ from engllm_chat.domain.models import (
     ChatFinalResponse,
     ChatMessage,
     ChatTokenUsage,
-    ChatToolCall,
     ChatToolResult,
-    DomainModel,
 )
 from engllm_chat.llm.base import (
     ChatLLMClient,
-    ChatToolDefinition,
     ChatTurnRequest,
 )
 from engllm_chat.prompts.chat import build_chat_system_prompt
@@ -41,168 +27,11 @@ from engllm_chat.tools.chat.models import (
     ChatWorkflowResultEvent,
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
-    FindFilesArgs,
-    GetFileInfoArgs,
-    ListDirectoryArgs,
-    ListDirectoryRecursiveArgs,
-    ReadFileArgs,
-    SearchTextArgs,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class _ChatToolSpec:
-    """One orchestrated chat tool definition and executor."""
-
-    name: str
-    description: str
-    argument_model: type[DomainModel]
-    runner: Callable[[DomainModel, Path, ChatConfig], DomainModel]
-
-
-def _run_list_directory(
-    args: DomainModel,
-    root_path: Path,
-    config: ChatConfig,
-) -> DomainModel:
-    typed_args = ListDirectoryArgs.model_validate(args.model_dump())
-    return list_directory(
-        root_path,
-        typed_args.path,
-        source_filters=config.source_filters,
-        tool_limits=config.tool_limits,
-    )
-
-
-def _run_list_directory_recursive(
-    args: DomainModel,
-    root_path: Path,
-    config: ChatConfig,
-) -> DomainModel:
-    typed_args = ListDirectoryRecursiveArgs.model_validate(args.model_dump())
-    return list_directory_recursive(
-        root_path,
-        typed_args.path,
-        source_filters=config.source_filters,
-        tool_limits=config.tool_limits,
-        max_depth=typed_args.max_depth,
-    )
-
-
-def _run_find_files(
-    args: DomainModel, root_path: Path, config: ChatConfig
-) -> DomainModel:
-    typed_args = FindFilesArgs.model_validate(args.model_dump())
-    return find_files(
-        root_path,
-        typed_args.pattern,
-        typed_args.path,
-        source_filters=config.source_filters,
-        tool_limits=config.tool_limits,
-    )
-
-
-def _run_search_text(
-    args: DomainModel,
-    root_path: Path,
-    config: ChatConfig,
-) -> DomainModel:
-    typed_args = SearchTextArgs.model_validate(args.model_dump())
-    return search_text(
-        root_path,
-        typed_args.query,
-        typed_args.path,
-        source_filters=config.source_filters,
-        tool_limits=config.tool_limits,
-    )
-
-
-def _run_get_file_info(
-    args: DomainModel,
-    root_path: Path,
-    config: ChatConfig,
-) -> DomainModel:
-    typed_args = GetFileInfoArgs.model_validate(args.model_dump())
-    return get_file_info(
-        root_path,
-        typed_args.path if typed_args.path is not None else typed_args.paths or [],
-        session_config=config.session,
-        tool_limits=config.tool_limits,
-    )
-
-
-def _run_read_file(
-    args: DomainModel, root_path: Path, config: ChatConfig
-) -> DomainModel:
-    typed_args = ReadFileArgs.model_validate(args.model_dump())
-    return read_file(
-        root_path,
-        typed_args.path,
-        session_config=config.session,
-        tool_limits=config.tool_limits,
-        start_char=typed_args.start_char,
-        end_char=typed_args.end_char,
-    )
-
-
-_TOOL_SPECS: tuple[_ChatToolSpec, ...] = (
-    _ChatToolSpec(
-        name="list_directory",
-        description="List immediate children of one directory.",
-        argument_model=ListDirectoryArgs,
-        runner=_run_list_directory,
-    ),
-    _ChatToolSpec(
-        name="list_directory_recursive",
-        description="List one directory subtree as a flat depth-first result.",
-        argument_model=ListDirectoryRecursiveArgs,
-        runner=_run_list_directory_recursive,
-    ),
-    _ChatToolSpec(
-        name="find_files",
-        description="Find files by root-relative glob pattern.",
-        argument_model=FindFilesArgs,
-        runner=_run_find_files,
-    ),
-    _ChatToolSpec(
-        name="search_text",
-        description="Search readable file content for a literal substring.",
-        argument_model=SearchTextArgs,
-        runner=_run_search_text,
-    ),
-    _ChatToolSpec(
-        name="get_file_info",
-        description=(
-            "Inspect one file or a small batch of files before deciding whether "
-            "or how to read them."
-        ),
-        argument_model=GetFileInfoArgs,
-        runner=_run_get_file_info,
-    ),
-    _ChatToolSpec(
-        name="read_file",
-        description=(
-            "Read text or converted markdown content, optionally using "
-            "start_char/end_char."
-        ),
-        argument_model=ReadFileArgs,
-        runner=_run_read_file,
-    ),
+from engllm_chat.tools.chat.registry import (
+    build_chat_tool_definitions,
+    execute_chat_tool_call,
 )
-
-_TOOL_SPEC_BY_NAME = {spec.name: spec for spec in _TOOL_SPECS}
-
-
-def _build_tool_definitions() -> list[ChatToolDefinition]:
-    return [
-        ChatToolDefinition(
-            name=spec.name,
-            description=spec.description,
-            input_schema=spec.argument_model.model_json_schema(),
-            argument_model=spec.argument_model,
-        )
-        for spec in _TOOL_SPECS
-    ]
 
 
 def _serialize_for_token_estimation(payload: object) -> str:
@@ -347,7 +176,10 @@ def _prepare_session_context(
 ) -> tuple[ChatMessage, ChatMessage, list[ChatMessage], int, str | None]:
     system_message = ChatMessage(
         role="system",
-        content=build_chat_system_prompt(tool_limits=config.tool_limits),
+        content=build_chat_system_prompt(
+            tool_limits=config.tool_limits,
+            tools=build_chat_tool_definitions(),
+        ),
     )
     user_chat_message = ChatMessage(role="user", content=user_message)
 
@@ -416,41 +248,6 @@ def _finalize_session_turn_result(
     )
 
 
-def _execute_tool_call(
-    tool_call: ChatToolCall,
-    *,
-    root_path: Path,
-    config: ChatConfig,
-) -> ChatToolResult:
-    spec = _TOOL_SPEC_BY_NAME.get(tool_call.tool_name)
-    if spec is None:
-        return ChatToolResult(
-            call_id=tool_call.call_id,
-            tool_name=tool_call.tool_name,
-            status="error",
-            payload={},
-            error_message=f"Unknown chat tool '{tool_call.tool_name}'",
-        )
-
-    try:
-        arguments = spec.argument_model.model_validate(tool_call.arguments)
-        payload_model = spec.runner(arguments, root_path, config)
-        return ChatToolResult(
-            call_id=tool_call.call_id,
-            tool_name=tool_call.tool_name,
-            status="ok",
-            payload=payload_model.model_dump(mode="json"),
-        )
-    except (PydanticValidationError, ValueError, TypeError, Exception) as exc:
-        return ChatToolResult(
-            call_id=tool_call.call_id,
-            tool_name=tool_call.tool_name,
-            status="error",
-            payload={},
-            error_message=str(exc),
-        )
-
-
 class ChatSessionTurnRunner:
     """Session-aware cancellable chat workflow for the interactive UI."""
 
@@ -498,7 +295,7 @@ class ChatSessionTurnRunner:
         tool_results: list[ChatToolResult] = []
         round_count = 0
         executed_tool_call_count = 0
-        tool_definitions = _build_tool_definitions()
+        tool_definitions = build_chat_tool_definitions()
         last_token_usage: ChatTokenUsage | None = None
         yield ChatWorkflowStatusEvent(status="thinking")
 
@@ -660,7 +457,7 @@ class ChatSessionTurnRunner:
                         )
                     )
                     return
-                tool_result = _execute_tool_call(
+                tool_result = execute_chat_tool_call(
                     tool_call,
                     root_path=self._root_path,
                     config=self._config,
@@ -708,7 +505,10 @@ def run_chat_turn(
 
     system_message = ChatMessage(
         role="system",
-        content=build_chat_system_prompt(tool_limits=config.tool_limits),
+        content=build_chat_system_prompt(
+            tool_limits=config.tool_limits,
+            tools=build_chat_tool_definitions(),
+        ),
     )
     user_chat_message = ChatMessage(role="user", content=user_message)
     messages: list[ChatMessage] = [system_message, *prior_messages, user_chat_message]
@@ -717,7 +517,7 @@ def run_chat_turn(
     round_count = 0
     executed_tool_call_count = 0
     last_token_usage = None
-    tool_definitions = _build_tool_definitions()
+    tool_definitions = build_chat_tool_definitions()
 
     while True:
         response = llm_client.generate_chat_turn(
@@ -774,7 +574,7 @@ def run_chat_turn(
             )
 
         for tool_call in response.tool_calls:
-            tool_result = _execute_tool_call(
+            tool_result = execute_chat_tool_call(
                 tool_call,
                 root_path=root_path,
                 config=config,
