@@ -76,7 +76,9 @@ class _FakeFunction:
 
 
 class _FakeToolCall:
-    def __init__(self, call_id: str, name: str, arguments: str | dict[str, object]) -> None:
+    def __init__(
+        self, call_id: str, name: str, arguments: str | dict[str, object]
+    ) -> None:
         self.id = call_id
         self.function = _FakeFunction(name, arguments)
 
@@ -521,9 +523,7 @@ def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel
             ),
             _FakeStreamingChunk(
                 delta=_FakeDelta(
-                    tool_calls=[
-                        _FakeDeltaToolCall(index=0, arguments='TODO"}')
-                    ]
+                    tool_calls=[_FakeDeltaToolCall(index=0, arguments='TODO"}')]
                 ),
                 finish_reason="tool_calls",
             ),

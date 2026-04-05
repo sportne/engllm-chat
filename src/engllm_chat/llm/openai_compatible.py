@@ -261,7 +261,9 @@ class _OpenAICompatibleChatTurnStream:
             if self._cancel_requested.is_set():
                 yield self._build_interrupted_event()
                 return
-            raise LLMError(f"{self._provider_name} streaming request failed: {exc}") from exc
+            raise LLMError(
+                f"{self._provider_name} streaming request failed: {exc}"
+            ) from exc
         finally:
             self._close_stream()
 
