@@ -52,6 +52,13 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 
 - [ ] Continue improving prompt/tool-selection behavior so models prefer source-code evidence over docs-heavy evidence for implementation questions.
 
+- [ ] Do integrated end-to-end testing of the Textual chat client and user experience
+  - Exercise the actual Textual app with the full workflow, provider layer, prompts, and deterministic tools wired together.
+  - Test real chat sessions against local and hosted providers where practical, not just isolated workflow helpers.
+  - Review the overall UX for responsiveness, interruptions, status messaging, transcript readability, and error recovery.
+  - Identify rough edges that only appear in the full app experience and fix them as a dedicated UX-quality pass.
+  - Add or improve regression coverage where the integrated client behavior can be tested deterministically.
+
 - [ ] Keep validating the smoke test flow against real providers
   - Re-run the generic smoke test against local Ollama after prompt or workflow changes.
   - Re-run it against hosted providers like Gemini when provider-layer behavior changes.
