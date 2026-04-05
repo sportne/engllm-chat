@@ -45,6 +45,10 @@ Probe an OpenAI-compatible endpoint:
 engllm-chat probe-openai-api --base-url http://localhost:11434/v1 --api-key dummy
 ```
 
+The probe now distinguishes what `engllm-chat` actually needs at runtime from
+broader OpenAI-compatible surface area. For the chat runtime, the important
+checks are Chat Completions and Structured Outputs for the selected text model.
+
 Run a repeatable chat workflow smoke test:
 
 ```bash

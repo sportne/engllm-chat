@@ -24,9 +24,14 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 ProbeCallable = Callable[[Any, "ProbeContext"], tuple[int | None, str]]
+RuntimeTier = Literal[
+    "required_for_engllm_chat",
+    "optional_for_engllm_chat",
+    "extra_compatibility_surface",
+]
 
 _PROBE_JSON_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -67,6 +72,7 @@ class OperationSpec:
 
     name: str
     description: str
+    runtime_tier: RuntimeTier
     sdk_path: tuple[str, ...]
     probe: ProbeCallable | None
     cost: str
@@ -78,6 +84,8 @@ class ProbeResult:
 
     name: str
     description: str
+    runtime_tier: RuntimeTier
+    runtime_required: bool
     sdk_path: str
     cost: str
     status: str
@@ -672,10 +680,16 @@ def _probe_audio_speech_create(
     return 200, f"request succeeded with model {context.tts_model!r}"
 
 
+# OpenAI docs show that Chat Completions and Responses can both support
+# structured outputs and function calling. `engllm-chat` currently uses Chat
+# Completions plus structured outputs only, so native tool calling and the
+# Responses API are reported as extra compatibility surface rather than runtime
+# prerequisites.
 OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="models.list",
         description="List registered models",
+        runtime_tier="optional_for_engllm_chat",
         sdk_path=("models", "list"),
         probe=_probe_models_list,
         cost="read-only",
@@ -683,6 +697,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="responses.create",
         description="Responses API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("responses", "create"),
         probe=_probe_responses_create,
         cost="low-cost inference",
@@ -690,6 +705,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="responses.create.structured_output",
         description="Responses structured outputs via text.format",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("responses", "create"),
         probe=_probe_responses_structured_output,
         cost="low-cost inference",
@@ -697,6 +713,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="responses.create.tool_calls",
         description="Responses function calling",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("responses", "create"),
         probe=_probe_responses_tool_calls,
         cost="low-cost inference",
@@ -704,6 +721,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="chat.completions.create",
         description="Chat Completions API",
+        runtime_tier="required_for_engllm_chat",
         sdk_path=("chat", "completions", "create"),
         probe=_probe_chat_completions_create,
         cost="low-cost inference",
@@ -711,6 +729,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="chat.completions.create.structured_output",
         description="Chat structured outputs via response_format=json_schema",
+        runtime_tier="required_for_engllm_chat",
         sdk_path=("chat", "completions", "create"),
         probe=_probe_chat_completions_structured_output,
         cost="low-cost inference",
@@ -718,6 +737,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="chat.completions.create.tool_calls",
         description="Chat function calling",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("chat", "completions", "create"),
         probe=_probe_chat_completions_tool_calls,
         cost="low-cost inference",
@@ -725,6 +745,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="embeddings.create",
         description="Embeddings API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("embeddings", "create"),
         probe=_probe_embeddings_create,
         cost="low-cost inference",
@@ -732,6 +753,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="moderations.create",
         description="Moderations API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("moderations", "create"),
         probe=_probe_moderations_create,
         cost="low-cost inference",
@@ -739,6 +761,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="files.list",
         description="List uploaded files",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("files", "list"),
         probe=_probe_files_list,
         cost="read-only",
@@ -746,6 +769,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="fine_tuning.jobs.list",
         description="List fine-tuning jobs",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("fine_tuning", "jobs", "list"),
         probe=_probe_fine_tuning_jobs_list,
         cost="read-only",
@@ -753,6 +777,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="batches.list",
         description="List batch jobs",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("batches", "list"),
         probe=_probe_batches_list,
         cost="read-only",
@@ -760,6 +785,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="vector_stores.list",
         description="List vector stores",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("vector_stores", "list"),
         probe=_probe_vector_stores_list,
         cost="read-only",
@@ -767,6 +793,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="images.generate",
         description="Image generation API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("images", "generate"),
         probe=_probe_images_generate,
         cost="optional image generation",
@@ -774,6 +801,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="audio.speech.create",
         description="Text-to-speech API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("audio", "speech", "create"),
         probe=_probe_audio_speech_create,
         cost="optional audio generation",
@@ -781,6 +809,7 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="audio.transcriptions.create",
         description="Audio transcription API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("audio", "transcriptions", "create"),
         probe=None,
         cost="manual probe required",
@@ -788,11 +817,16 @@ OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="audio.translations.create",
         description="Audio translation API",
+        runtime_tier="extra_compatibility_surface",
         sdk_path=("audio", "translations", "create"),
         probe=None,
         cost="manual probe required",
     ),
 )
+
+
+def _is_runtime_required(tier: RuntimeTier) -> bool:
+    return tier == "required_for_engllm_chat"
 
 
 def _probe_operation(
@@ -805,6 +839,8 @@ def _probe_operation(
         return ProbeResult(
             name=spec.name,
             description=spec.description,
+            runtime_tier=spec.runtime_tier,
+            runtime_required=_is_runtime_required(spec.runtime_tier),
             sdk_path=".".join(spec.sdk_path),
             cost=spec.cost,
             status="unavailable",
@@ -817,6 +853,8 @@ def _probe_operation(
         return ProbeResult(
             name=spec.name,
             description=spec.description,
+            runtime_tier=spec.runtime_tier,
+            runtime_required=_is_runtime_required(spec.runtime_tier),
             sdk_path=".".join(spec.sdk_path),
             cost=spec.cost,
             status="skipped",
@@ -832,6 +870,8 @@ def _probe_operation(
         return ProbeResult(
             name=spec.name,
             description=spec.description,
+            runtime_tier=spec.runtime_tier,
+            runtime_required=_is_runtime_required(spec.runtime_tier),
             sdk_path=".".join(spec.sdk_path),
             cost=spec.cost,
             status="available",
@@ -844,6 +884,8 @@ def _probe_operation(
         return ProbeResult(
             name=spec.name,
             description=spec.description,
+            runtime_tier=spec.runtime_tier,
+            runtime_required=_is_runtime_required(spec.runtime_tier),
             sdk_path=".".join(spec.sdk_path),
             cost=spec.cost,
             status="skipped",
@@ -856,6 +898,8 @@ def _probe_operation(
         return ProbeResult(
             name=spec.name,
             description=spec.description,
+            runtime_tier=spec.runtime_tier,
+            runtime_required=_is_runtime_required(spec.runtime_tier),
             sdk_path=".".join(spec.sdk_path),
             cost=spec.cost,
             status=exc.status,
@@ -869,6 +913,8 @@ def _probe_operation(
         return ProbeResult(
             name=spec.name,
             description=spec.description,
+            runtime_tier=spec.runtime_tier,
+            runtime_required=_is_runtime_required(spec.runtime_tier),
             sdk_path=".".join(spec.sdk_path),
             cost=spec.cost,
             status=status,
@@ -879,9 +925,10 @@ def _probe_operation(
 
 
 def _format_table(results: Sequence[ProbeResult]) -> str:
-    headers = ("status", "operation", "http", "elapsed", "detail")
+    headers = ("tier", "status", "operation", "http", "elapsed", "detail")
     rows = [
         (
+            result.runtime_tier,
             result.status,
             result.name,
             str(result.http_status) if result.http_status is not None else "-",
@@ -903,6 +950,104 @@ def _format_table(results: Sequence[ProbeResult]) -> str:
     lines = [render_row(headers), render_row(tuple("-" * width for width in widths))]
     lines.extend(render_row(row) for row in rows)
     return "\n".join(lines)
+
+
+def _build_runtime_summary(
+    results: Sequence[ProbeResult], *, text_model: str | None
+) -> dict[str, object]:
+    required_results = [
+        result
+        for result in results
+        if result.runtime_tier == "required_for_engllm_chat"
+    ]
+    blocking_results = [
+        result
+        for result in required_results
+        if result.status in {"unavailable", "restricted", "skipped"}
+    ]
+    indeterminate_results = [
+        result for result in required_results if result.status == "indeterminate"
+    ]
+
+    if blocking_results:
+        status = "not_ready"
+    elif indeterminate_results:
+        status = "indeterminate"
+    else:
+        status = "ready"
+
+    if not text_model:
+        status = "not_ready"
+
+    if status == "ready":
+        note = (
+            "engllm-chat can run against this endpoint because Chat Completions "
+            "and Structured Outputs succeeded for the selected text model."
+        )
+    elif status == "indeterminate":
+        note = (
+            "engllm-chat readiness could not be confirmed because a required "
+            "chat capability was inconclusive for the selected text model."
+        )
+    else:
+        note = (
+            "engllm-chat currently requires Chat Completions and Structured "
+            "Outputs on the selected text model. Responses API support and "
+            "native function calling are informative extras, not runtime requirements."
+        )
+
+    return {
+        "status": status,
+        "selected_text_model": text_model,
+        "required_operations": [
+            {
+                "name": result.name,
+                "status": result.status,
+                "detail": result.detail,
+            }
+            for result in required_results
+        ],
+        "blocking_operations": [
+            {
+                "name": result.name,
+                "status": result.status,
+                "detail": result.detail,
+            }
+            for result in (*blocking_results, *indeterminate_results)
+        ],
+        "note": note,
+    }
+
+
+def _build_tier_summary(results: Sequence[ProbeResult]) -> dict[str, dict[str, int]]:
+    summary: dict[str, dict[str, int]] = {}
+    for tier in (
+        "required_for_engllm_chat",
+        "optional_for_engllm_chat",
+        "extra_compatibility_surface",
+    ):
+        tier_results = [result for result in results if result.runtime_tier == tier]
+        counts: dict[str, int] = {"total": len(tier_results)}
+        for status in (
+            "available",
+            "unavailable",
+            "restricted",
+            "skipped",
+            "indeterminate",
+        ):
+            counts[status] = sum(
+                1 for result in tier_results if result.status == status
+            )
+        summary[tier] = counts
+    return summary
+
+
+def _format_runtime_status(status: str) -> str:
+    return {
+        "ready": "READY",
+        "not_ready": "NOT READY",
+        "indeterminate": "INDETERMINATE",
+    }[status]
 
 
 def _emit_progress(message: str, *, enabled: bool) -> None:
@@ -1115,6 +1260,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "image_model": context.image_model,
             "tts_model": context.tts_model,
         },
+        "engllm_chat_runtime": _build_runtime_summary(
+            results,
+            text_model=context.text_model,
+        ),
+        "summary_by_tier": _build_tier_summary(results),
         "results": [asdict(result) for result in results],
         "legend": {
             "available": "operation succeeded or clearly exists",
@@ -1138,6 +1288,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"  image_model: {context.image_model or 'none'}")
     print(f"  tts_model: {context.tts_model or 'none'}")
     print()
+    runtime_summary = _build_runtime_summary(results, text_model=context.text_model)
+    required_operations = runtime_summary["required_operations"]
+    print(
+        "engllm-chat runtime: "
+        f"{_format_runtime_status(str(runtime_summary['status']))}"
+    )
+    print(f"  {runtime_summary['note']}")
+    print("Required for engllm-chat:")
+    if isinstance(required_operations, list):
+        for item in required_operations:
+            if not isinstance(item, dict):
+                continue
+            print(f"  - {item['name']}: {item['status']} ({item['detail']})")
+    print()
     print(_format_table(results))
     print()
     print("Legend:")
@@ -1146,6 +1310,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("  restricted    endpoint exists but this token cannot use it")
     print("  skipped       probe not attempted because a prerequisite was missing")
     print("  indeterminate connectivity or server behavior prevented a conclusion")
+    print("Tier meanings:")
+    print("  required_for_engllm_chat      needed by the current chat runtime")
+    print("  optional_for_engllm_chat      helpful, but not required")
+    print(
+        "  extra_compatibility_surface   broader API surface not used by chat runtime"
+    )
     return 0
 
 

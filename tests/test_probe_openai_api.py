@@ -196,6 +196,78 @@ def test_probe_tool_call_extractors_handle_success_and_missing_calls() -> None:
         probe._extract_responses_tool_call(SimpleNamespace(output=[]))
 
 
+def test_probe_runtime_tiers_and_summary_reflect_engllm_chat_requirements() -> None:
+    assert probe._is_runtime_required("required_for_engllm_chat") is True
+    assert probe._is_runtime_required("optional_for_engllm_chat") is False
+
+    ready_results = [
+        probe.ProbeResult(
+            name="chat.completions.create",
+            description="Chat",
+            runtime_tier="required_for_engllm_chat",
+            runtime_required=True,
+            sdk_path="chat.completions.create",
+            cost="low-cost inference",
+            status="available",
+            detail="ok",
+            http_status=200,
+            elapsed_ms=1,
+        ),
+        probe.ProbeResult(
+            name="chat.completions.create.structured_output",
+            description="Structured",
+            runtime_tier="required_for_engllm_chat",
+            runtime_required=True,
+            sdk_path="chat.completions.create",
+            cost="low-cost inference",
+            status="available",
+            detail="ok",
+            http_status=200,
+            elapsed_ms=1,
+        ),
+        probe.ProbeResult(
+            name="models.list",
+            description="Models",
+            runtime_tier="optional_for_engllm_chat",
+            runtime_required=False,
+            sdk_path="models.list",
+            cost="read-only",
+            status="unavailable",
+            detail="not needed",
+            http_status=404,
+            elapsed_ms=1,
+        ),
+    ]
+    summary = probe._build_runtime_summary(ready_results, text_model="gpt-5-mini")
+    assert summary["status"] == "ready"
+    assert summary["blocking_operations"] == []
+
+    not_ready = probe._build_runtime_summary(
+        [
+            *ready_results[:1],
+            ready_results[1].__class__(
+                **{**ready_results[1].__dict__, "status": "restricted"}
+            ),
+        ],
+        text_model="gpt-5-mini",
+    )
+    assert not_ready["status"] == "not_ready"
+
+    indeterminate = probe._build_runtime_summary(
+        [
+            *ready_results[:1],
+            ready_results[1].__class__(
+                **{**ready_results[1].__dict__, "status": "indeterminate"}
+            ),
+        ],
+        text_model="gpt-5-mini",
+    )
+    assert indeterminate["status"] == "indeterminate"
+
+    no_model = probe._build_runtime_summary(ready_results, text_model=None)
+    assert no_model["status"] == "not_ready"
+
+
 def test_probe_individual_api_checks_cover_success_and_precondition_paths() -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
@@ -335,6 +407,7 @@ def test_probe_operation_handles_all_major_result_states() -> None:
         probe.OperationSpec(
             name="missing",
             description="Missing target",
+            runtime_tier="extra_compatibility_surface",
             sdk_path=("foo", "bar"),
             probe=lambda _client, _ctx: (200, "never"),
             cost="read-only",
@@ -348,6 +421,7 @@ def test_probe_operation_handles_all_major_result_states() -> None:
         probe.OperationSpec(
             name="files.list",
             description="Manual",
+            runtime_tier="extra_compatibility_surface",
             sdk_path=("files", "list"),
             probe=None,
             cost="manual",
@@ -361,6 +435,7 @@ def test_probe_operation_handles_all_major_result_states() -> None:
         probe.OperationSpec(
             name="models.list",
             description="Needs setup",
+            runtime_tier="optional_for_engllm_chat",
             sdk_path=("models", "list"),
             probe=lambda _client, _ctx: (_ for _ in ()).throw(ValueError("not ready")),
             cost="read-only",
@@ -375,6 +450,7 @@ def test_probe_operation_handles_all_major_result_states() -> None:
         probe.OperationSpec(
             name="models.list",
             description="Probe failure",
+            runtime_tier="optional_for_engllm_chat",
             sdk_path=("models", "list"),
             probe=lambda _client, _ctx: (_ for _ in ()).throw(
                 probe.ProbeFailure(
@@ -398,6 +474,7 @@ def test_probe_operation_handles_all_major_result_states() -> None:
         probe.OperationSpec(
             name="models.list",
             description="Classified exception",
+            runtime_tier="optional_for_engllm_chat",
             sdk_path=("models", "list"),
             probe=lambda _client, _ctx: (_ for _ in ()).throw(_HTTP404Error()),
             cost="read-only",
@@ -415,6 +492,7 @@ def test_probe_operations_with_progress_and_format_table(
         probe.OperationSpec(
             name="models.list",
             description="List models",
+            runtime_tier="optional_for_engllm_chat",
             sdk_path=("models", "list"),
             probe=lambda _client, _ctx: (200, "listed"),
             cost="read-only",
@@ -481,6 +559,7 @@ def test_probe_main_emits_json_report_with_discovered_models(
             probe.OperationSpec(
                 name="models.list",
                 description="List registered models",
+                runtime_tier="optional_for_engllm_chat",
                 sdk_path=("models", "list"),
                 probe=probe._probe_models_list,
                 cost="read-only",
@@ -488,6 +567,7 @@ def test_probe_main_emits_json_report_with_discovered_models(
             probe.OperationSpec(
                 name="chat.completions.create",
                 description="Chat",
+                runtime_tier="required_for_engllm_chat",
                 sdk_path=("chat", "completions", "create"),
                 probe=lambda _client, context: (
                     200,
@@ -516,6 +596,9 @@ def test_probe_main_emits_json_report_with_discovered_models(
     assert report["sdk_version"] == "1.2.3"
     assert report["selected_models"]["text_model"] == "gpt-5-mini"
     assert report["results"][0]["name"] == "models.list"
+    assert report["results"][0]["runtime_tier"] == "optional_for_engllm_chat"
+    assert report["engllm_chat_runtime"]["status"] == "ready"
+    assert "summary_by_tier" in report
     assert _FakeClient.last_init == {
         "api_key": "token",
         "base_url": "https://example.test/v1",
@@ -535,9 +618,26 @@ def test_probe_main_emits_text_report(
             probe.OperationSpec(
                 name="models.list",
                 description="List registered models",
+                runtime_tier="optional_for_engllm_chat",
                 sdk_path=("models", "list"),
                 probe=probe._probe_models_list,
                 cost="read-only",
+            ),
+            probe.OperationSpec(
+                name="chat.completions.create",
+                description="Chat Completions API",
+                runtime_tier="required_for_engllm_chat",
+                sdk_path=("chat", "completions", "create"),
+                probe=lambda _client, _ctx: (200, "chat ok"),
+                cost="low-cost inference",
+            ),
+            probe.OperationSpec(
+                name="chat.completions.create.structured_output",
+                description="Structured output",
+                runtime_tier="required_for_engllm_chat",
+                sdk_path=("chat", "completions", "create"),
+                probe=lambda _client, _ctx: (200, "structured ok"),
+                cost="low-cost inference",
             ),
         ),
     )
@@ -556,4 +656,7 @@ def test_probe_main_emits_text_report(
     assert rc == 0
     assert "OpenAI-Compatible API Probe" in captured.out
     assert "Base URL: https://example.test/v1" in captured.out
+    assert "engllm-chat runtime: READY" in captured.out
+    assert "Required for engllm-chat:" in captured.out
+    assert "tier" in captured.out
     assert "models.list" in captured.out

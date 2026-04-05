@@ -16,7 +16,7 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 
 ## Product and behavior follow-ups
 
-- [ ] Tighten the probe utility output so it distinguishes required runtime APIs from optional or extra OpenAI-compatible capabilities.
+- [x] Tighten the probe utility output so it distinguishes required runtime APIs from optional or extra OpenAI-compatible capabilities.
 
 - [ ] Continue improving prompt/tool-selection behavior so models prefer source-code evidence over docs-heavy evidence for implementation questions.
 
@@ -62,3 +62,4 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 - [x] Added a repeatable chat smoke test with verbose LLM logging support.
 - [x] Generalized the smoke test path so it can target hosted providers such as Gemini.
 - [x] Completed the contributor-reference and teaching-oriented documentation pass.
+- [x] Tightened the probe utility output around `engllm-chat` runtime requirements.
