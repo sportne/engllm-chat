@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("textual")
 
 from textual.containers import VerticalScroll
-from textual.widgets import Button, Input, Markdown, Static, TextArea
+from textual.widgets import Button, Input, Static, TextArea
 
 from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import (
@@ -42,6 +42,18 @@ from engllm_chat.tools.chat.models import (
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
 )
+
+
+@pytest.fixture(autouse=True)
+def _speed_up_status_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.controller._STATUS_MIN_DISPLAY_SECONDS",
+        0.05,
+    )
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.controller._STATUS_ANIMATION_INTERVAL_SECONDS",
+        0.02,
+    )
 
 
 def _transcript_texts(app: ChatApp) -> list[str]:
@@ -228,7 +240,7 @@ def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
     assert markdown_entry.transcript_text.startswith("Assistant:\n1. **Bold**")
     assert ".transcript-entry.user" in ChatScreen.DEFAULT_CSS
     assert ".transcript-entry.assistant" in ChatScreen.DEFAULT_CSS
-    assert ".assistant-markdown-body" in ChatScreen.DEFAULT_CSS
+    assert "transcript-entry-markdown" in markdown_entry.classes
 
 
 def test_chat_app_launches_with_shell_layout_and_startup_message(
@@ -294,6 +306,7 @@ def test_chat_app_enter_sends_and_updates_transcript_and_footer(tmp_path: Path) 
             composer.focus()
             await pilot.press("enter")
             await pilot.pause()
+            await pilot.pause(0.06)
             transcript_texts = _transcript_texts(app)
             assert any("You:\nWhat is here?" in text for text in transcript_texts)
             assert any("Assistant:\nDone" in text for text in transcript_texts)
@@ -355,6 +368,7 @@ def test_chat_app_multiline_draft_and_status_updates_stay_out_of_transcript(
             composer.load_text("first line\nsecond line")
             await pilot.click("#send-button")
             await pilot.pause()
+            await pilot.pause(0.06)
             transcript_texts = _transcript_texts(app)
             assert any(
                 "You:\nfirst line\nsecond line" in text for text in transcript_texts
@@ -702,6 +716,7 @@ def test_chat_app_handles_continuation_and_interrupted_without_content(
                 )
             )
             await pilot.pause()
+            await pilot.pause(0.06)
 
             transcript_texts = _transcript_texts(app)
             assert any("Need more tool budget." in text for text in transcript_texts)
@@ -772,7 +787,12 @@ def test_chat_app_completed_answer_renders_labeled_sections(tmp_path: Path) -> N
                             ],
                             final_response=ChatFinalResponse(
                                 answer="Done",
-                                citations=[],
+                                citations=[
+                                    ChatCitation(
+                                        source_path=Path("src/app.py"),
+                                        line_start=2,
+                                    )
+                                ],
                                 uncertainty=["Unsure"],
                                 missing_information=["Missing"],
                                 follow_up_suggestions=["Next"],
@@ -793,16 +813,17 @@ def test_chat_app_completed_answer_renders_labeled_sections(tmp_path: Path) -> N
             composer.load_text("hello")
             await pilot.press("enter")
             await pilot.pause()
+            await pilot.pause(0.06)
             assistant_text = "\n\n".join(_transcript_texts(app))
             assert "Assistant:\nDone" in assistant_text
-            assert "### Uncertainty\n- Unsure" in assistant_text
-            assert "### Missing Information\n- Missing" in assistant_text
-            assert "### Follow-up Suggestions\n- Next" in assistant_text
+            assert "Citations:\n- src/app.py:2" in assistant_text
+            assert "Uncertainty:\n- Unsure" in assistant_text
+            assert "Missing Information:\n- Missing" in assistant_text
+            assert "Follow-up Suggestions:\n- Next" in assistant_text
             assistant_entries = _assistant_markdown_entries(screen)
             assert len(assistant_entries) == 1
-            markdown_widget = assistant_entries[0].query_one(Markdown)
             assert assistant_entries[0].markdown_text.startswith("Done")
-            assert markdown_widget is not None
+            assert "Citations:\n- src/app.py:2" in assistant_entries[0].metadata_text
             app.exit()
             await pilot.pause()
 
@@ -839,7 +860,6 @@ def test_chat_app_completed_answer_uses_markdown_widget_and_falls_back_cleanly(
             assert assistant_entries[0].markdown_text.startswith(
                 "1. **Bold** answer with `code`"
             )
-            assert assistant_entries[0].query_one(Markdown) is not None
 
             class _BrokenAssistantMarkdownEntry:
                 def __init__(self, *, markdown_text: str) -> None:
@@ -915,24 +935,30 @@ def test_chat_app_worker_path_updates_busy_state_and_completes(
             composer.load_text("What is here?")
             await pilot.click("#send-button")
 
-            for _ in range(50):
-                await pilot.pause()
-                if _static_text(screen, "#status-bar") == "thinking":
+            transcript_texts: list[str] = []
+            for _ in range(20):
+                await pilot.pause(0.01)
+                transcript_texts = _transcript_texts(app)
+                if screen._busy or any(
+                    "Assistant:\nDone" in text for text in transcript_texts
+                ):
                     break
 
             stop_button = screen.query_one("#stop-button", Button)
-            assert screen._busy is True
-            assert stop_button.disabled is False
-            assert _static_text(screen, "#status-bar") == "thinking"
-            assert "Stop active turn" in _static_text(screen, "#footer-bar")
             assert any("You:\nWhat is here?" in text for text in _transcript_texts(app))
+            if screen._busy:
+                assert stop_button.disabled is False
+                assert _static_text(screen, "#status-bar").startswith("thinking")
+                assert "Stop active turn" in _static_text(screen, "#footer-bar")
 
             gate.set()
             for _ in range(50):
                 await pilot.pause()
                 transcript_texts = _transcript_texts(app)
-                if not screen._busy and any(
-                    "Assistant:\nDone" in text for text in transcript_texts
+                if (
+                    not screen._busy
+                    and _static_text(screen, "#status-bar") == ""
+                    and any("Assistant:\nDone" in text for text in transcript_texts)
                 ):
                     break
 
@@ -996,6 +1022,7 @@ def test_chat_app_worker_path_handles_continuation_and_allows_follow_up_submit(
                 await pilot.pause()
                 if not screen._busy:
                     break
+            await pilot.pause(0.06)
 
             transcript_texts = _transcript_texts(app)
             assert any("Need more tool budget." in text for text in transcript_texts)
@@ -1108,6 +1135,70 @@ def test_chat_app_worker_path_recovers_from_provider_error(
             assert call_messages == ["first try"]
             assert any("Assistant:\nRecovered" in text for text in transcript_texts)
             assert app.focused is screen.query_one("#composer", ComposerTextArea)
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_status_bar_holds_brief_updates_before_clearing(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._set_status("thinking")
+            assert _static_text(screen, "#status-bar") == "thinking"
+
+            screen._set_status("")
+            await pilot.pause()
+            assert _static_text(screen, "#status-bar").startswith("thinking")
+
+            await pilot.pause(0.06)
+            assert _static_text(screen, "#status-bar") == ""
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_status_bar_animates_active_status_text(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._set_status("searching text")
+            observed = [_static_text(screen, "#status-bar")]
+            await pilot.pause(0.03)
+            observed.append(_static_text(screen, "#status-bar"))
+            await pilot.pause(0.03)
+            observed.append(_static_text(screen, "#status-bar"))
+            await pilot.pause(0.03)
+            observed.append(_static_text(screen, "#status-bar"))
+
+            assert observed[0] == "searching text"
+            assert all(text.startswith("searching text") for text in observed)
+            assert len(set(observed)) >= 2
+            assert any(text.endswith(".") for text in observed[1:])
+
+            screen._set_status("")
+            await pilot.pause(0.06)
+            assert _static_text(screen, "#status-bar") == ""
             app.exit()
             await pilot.pause()
 

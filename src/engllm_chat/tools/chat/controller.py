@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from textual.containers import VerticalScroll
+from textual.timer import Timer
 from textual.widgets import Button, Static
 
 from engllm_chat.tools.chat.models import (
@@ -17,7 +19,7 @@ from engllm_chat.tools.chat.presentation import (
     AssistantMarkdownEntry,
     TranscriptEntry,
     format_final_response,
-    format_final_response_markdown,
+    format_final_response_metadata,
 )
 from engllm_chat.tools.chat.screens import (
     ComposerTextArea,
@@ -29,11 +31,21 @@ if TYPE_CHECKING:
     from engllm_chat.tools.chat.app import ChatScreen
 
 
+_STATUS_MIN_DISPLAY_SECONDS = 0.4
+_STATUS_ANIMATION_INTERVAL_SECONDS = 0.25
+
+
 class ChatScreenController:
     """Encapsulate turn lifecycle and UI state transitions for ChatScreen."""
 
     def __init__(self, screen: ChatScreen) -> None:
         self._screen = screen
+        self._status_base_text = ""
+        self._status_pending_text: str | None = None
+        self._status_visible_since = 0.0
+        self._status_animation_step = 0
+        self._status_hold_timer: Timer | None = None
+        self._status_animation_timer: Timer | None = None
 
     def initialize_llm_client(self) -> bool:
         if self._screen._llm_client is not None:
@@ -94,11 +106,14 @@ class ChatScreenController:
         return entry
 
     def append_assistant_markdown(
-        self, markdown_text: str, *, fallback_text: str
+        self, markdown_text: str, *, metadata_text: str, fallback_text: str
     ) -> AssistantMarkdownEntry | TranscriptEntry:
         transcript = self._screen.query_one("#transcript", VerticalScroll)
         try:
-            entry = AssistantMarkdownEntry(markdown_text=markdown_text)
+            entry = AssistantMarkdownEntry(
+                markdown_text=markdown_text,
+                metadata_text=metadata_text,
+            )
             transcript.mount(entry)
             transcript.scroll_end(animate=False)
             return entry
@@ -106,7 +121,80 @@ class ChatScreenController:
             return self.append_transcript("assistant", fallback_text)
 
     def set_status(self, text: str) -> None:
-        self._screen.query_one("#status-bar", Static).update(text)
+        requested_text = text.strip()
+        current_text = self._status_base_text
+        now = monotonic()
+
+        if requested_text == current_text:
+            self._status_pending_text = None
+            self._stop_status_hold_timer()
+            return
+
+        if current_text:
+            elapsed = now - self._status_visible_since
+            if elapsed < _STATUS_MIN_DISPLAY_SECONDS:
+                self._status_pending_text = requested_text
+                self._schedule_status_transition(_STATUS_MIN_DISPLAY_SECONDS - elapsed)
+                return
+
+        self._apply_status_text(requested_text)
+
+    def _apply_status_text(self, text: str) -> None:
+        self._stop_status_hold_timer()
+        self._status_pending_text = None
+        self._status_base_text = text
+        self._status_animation_step = 0
+        self._status_visible_since = monotonic() if text else 0.0
+        self._render_status_text()
+
+        if not text:
+            if self._status_animation_timer is not None:
+                self._status_animation_timer.pause()
+            return
+
+        if self._status_animation_timer is None:
+            self._status_animation_timer = self._screen.set_interval(
+                _STATUS_ANIMATION_INTERVAL_SECONDS,
+                self._advance_status_animation,
+                pause=True,
+            )
+        self._status_animation_timer.reset()
+        self._status_animation_timer.resume()
+
+    def _schedule_status_transition(self, delay_seconds: float) -> None:
+        self._stop_status_hold_timer()
+        self._status_hold_timer = self._screen.set_timer(
+            delay_seconds,
+            self._flush_pending_status,
+        )
+
+    def _stop_status_hold_timer(self) -> None:
+        if self._status_hold_timer is not None:
+            self._status_hold_timer.stop()
+            self._status_hold_timer = None
+
+    def _flush_pending_status(self) -> None:
+        pending_text = self._status_pending_text
+        self._status_hold_timer = None
+        if pending_text is None:
+            return
+        self._apply_status_text(pending_text)
+
+    def _advance_status_animation(self) -> None:
+        if not self._status_base_text:
+            if self._status_animation_timer is not None:
+                self._status_animation_timer.pause()
+            return
+        self._status_animation_step = (
+            1 if self._status_animation_step >= 3 else self._status_animation_step + 1
+        )
+        self._render_status_text()
+
+    def _render_status_text(self) -> None:
+        rendered = self._status_base_text
+        if rendered and self._status_animation_step:
+            rendered = f"{rendered}{'.' * self._status_animation_step}"
+        self._screen.query_one("#status-bar", Static).update(rendered)
 
     def refresh_footer(self) -> None:
         session_tokens = (
@@ -185,7 +273,8 @@ class ChatScreenController:
             return
         self._screen._active_assistant_entry = None
         self.append_assistant_markdown(
-            format_final_response_markdown(final_response),
+            final_response.answer.rstrip(),
+            metadata_text=format_final_response_metadata(final_response),
             fallback_text=format_final_response(final_response),
         )
 

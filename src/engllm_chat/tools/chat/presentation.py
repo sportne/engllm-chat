@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Markdown, Static
+from rich.console import ConsoleRenderable, Group
+from rich.markdown import Markdown as RichMarkdown
+from rich.text import Text
+from textual.widgets import Static
 
 from engllm_chat.domain.models import ChatCitation, ChatFinalResponse
 
@@ -66,23 +67,57 @@ def format_final_response_markdown(response: ChatFinalResponse) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
-class AssistantMarkdownEntry(Vertical):
+def format_final_response_metadata(response: ChatFinalResponse) -> str:
+    """Return supplemental response sections as plain transcript text."""
+
+    sections: list[str] = []
+    if response.citations:
+        citations = "\n".join(
+            f"- {format_citation(citation)}" for citation in response.citations
+        )
+        sections.append(f"Citations:\n{citations}")
+    if response.uncertainty:
+        uncertainty = "\n".join(f"- {item}" for item in response.uncertainty)
+        sections.append(f"Uncertainty:\n{uncertainty}")
+    if response.missing_information:
+        missing_information = "\n".join(
+            f"- {item}" for item in response.missing_information
+        )
+        sections.append(f"Missing Information:\n{missing_information}")
+    if response.follow_up_suggestions:
+        follow_ups = "\n".join(f"- {item}" for item in response.follow_up_suggestions)
+        sections.append(f"Follow-up Suggestions:\n{follow_ups}")
+    return "\n\n".join(sections)
+
+
+class AssistantMarkdownEntry(Static):
     """One completed assistant response rendered with Textual markdown."""
 
-    def __init__(self, *, markdown_text: str) -> None:
+    def __init__(self, *, markdown_text: str, metadata_text: str = "") -> None:
         self.markdown_text = markdown_text
+        self.metadata_text = metadata_text
         self.label_text = "Assistant:"
-        super().__init__(classes="transcript-entry assistant transcript-entry-markdown")
+        super().__init__(
+            self._build_renderable(),
+            classes="transcript-entry assistant transcript-entry-markdown",
+        )
 
     @property
     def transcript_text(self) -> str:
         """Return a plain-text approximation used by tests and fallbacks."""
 
-        return f"{self.label_text}\n{self.markdown_text}".rstrip()
+        parts = [f"{self.label_text}\n{self.markdown_text}".rstrip()]
+        if self.metadata_text:
+            parts.append(self.metadata_text)
+        return "\n\n".join(parts).rstrip()
 
-    def compose(self) -> ComposeResult:
-        yield Static(self.label_text, classes="transcript-entry-label")
-        yield Markdown(self.markdown_text, classes="assistant-markdown-body")
+    def _build_renderable(self) -> Group:
+        renderables: list[ConsoleRenderable] = [Text(self.label_text, style="bold")]
+        if self.markdown_text:
+            renderables.append(RichMarkdown(self.markdown_text))
+        if self.metadata_text:
+            renderables.append(Text(self.metadata_text))
+        return Group(*renderables)
 
 
 class TranscriptEntry(Static):
