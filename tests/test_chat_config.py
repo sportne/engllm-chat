@@ -29,7 +29,8 @@ def test_load_chat_config_defaults(tmp_path: Path) -> None:
 
     assert config.llm.provider == "ollama"
     assert config.llm.model_name == "qwen2.5:7b-instruct"
-    assert config.llm.ollama_base_url == "http://127.0.0.1:11434"
+    assert config.llm.api_base_url is None
+    assert config.llm.resolved_api_base_url() == "http://127.0.0.1:11434"
     assert config.source_filters.include == []
     assert config.source_filters.exclude == []
     assert config.source_filters.include_hidden is False
@@ -116,6 +117,17 @@ def test_chat_llm_config_prefers_explicit_hosted_provider_overrides() -> None:
     assert config.credential_prompt_metadata().api_key_env_var == "CUSTOM_XAI_TOKEN"
 
 
+def test_chat_llm_config_migrates_legacy_ollama_base_url_to_api_base_url() -> None:
+    config = ChatLLMConfig(
+        provider="ollama",
+        model_name="qwen",
+        ollama_base_url="http://localhost:11434",  # type: ignore[call-arg]
+    )
+
+    assert config.api_base_url == "http://localhost:11434"
+    assert config.resolved_api_base_url() == "http://localhost:11434"
+
+
 def test_load_chat_config_rejects_validation_errors(tmp_path: Path) -> None:
     config_path = tmp_path / "chat.yaml"
     config_path.write_text(
@@ -168,7 +180,6 @@ session:
     ("kwargs", "message"),
     [
         ({"model_name": "   "}, "chat LLM string settings must not be empty"),
-        ({"ollama_base_url": "   "}, "chat LLM string settings must not be empty"),
         (
             {"api_base_url": "   "},
             "api_base_url must not be empty when provided",

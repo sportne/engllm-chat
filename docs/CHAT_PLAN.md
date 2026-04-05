@@ -52,7 +52,6 @@ Locked CLI override set for C1-01:
   - `--provider {ollama,mock,openai,xai,anthropic,gemini}`
   - `--model <name>`
   - `--temperature <float>`
-  - `--ollama-base-url <url>`
   - `--api-base-url <url>`
 - session limits:
   - `--max-context-tokens`

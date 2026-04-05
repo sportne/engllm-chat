@@ -16,7 +16,6 @@ def create_chat_llm_client(
     config: ChatLLMConfig,
     provider: ChatProvider | None = None,
     model_name: str | None = None,
-    ollama_base_url: str | None = None,
     api_base_url: str | None = None,
     timeout_seconds: float | None = None,
     api_key: str | None = None,
@@ -31,7 +30,7 @@ def create_chat_llm_client(
         return MockLLMClient(model_name=resolved_model)
 
     if resolved_provider == "ollama":
-        resolved_base_url = ollama_base_url or config.ollama_base_url
+        resolved_base_url = api_base_url or config.resolved_api_base_url()
         return OpenAICompatibleChatLLMClient(
             model_name=resolved_model,
             provider_name="ollama",

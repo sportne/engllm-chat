@@ -35,8 +35,6 @@ def _resolve_chat_config(args: argparse.Namespace) -> ChatConfig:
     raw["llm"]["temperature"] = _resolve_temperature(
         args.temperature, base_config.llm.temperature
     )
-    if args.ollama_base_url is not None:
-        raw["llm"]["ollama_base_url"] = args.ollama_base_url
     if args.api_base_url is not None:
         raw["llm"]["api_base_url"] = args.api_base_url
 
@@ -134,7 +132,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     interactive.add_argument("--model", type=str)
     interactive.add_argument("--temperature", type=float)
-    interactive.add_argument("--ollama-base-url", type=str)
     interactive.add_argument("--api-base-url", type=str)
     interactive.add_argument("--max-context-tokens", type=int)
     interactive.add_argument("--max-tool-round-trips", type=int)

@@ -77,7 +77,7 @@ llm:
   provider: ollama
   model_name: qwen2.5:7b-instruct
   temperature: 0.1
-  ollama_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434
   api_base_url: null
   timeout_seconds: 60.0
   api_key_env_var: null
@@ -138,7 +138,7 @@ engllm-chat interactive . --config chat.yaml \
   --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M \
   --temperature 0.2 \
-  --ollama-base-url http://127.0.0.1:11434
+  --api-base-url http://127.0.0.1:11434
 ```
 
 Hosted providers can override the OpenAI-compatible endpoint explicitly:
@@ -235,7 +235,7 @@ If you use a different Ollama endpoint:
 engllm-chat interactive . --config chat.yaml \
   --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M \
-  --ollama-base-url http://localhost:11434
+  --api-base-url http://localhost:11434
 ```
 
 ## Hosted Provider Examples
@@ -294,7 +294,7 @@ workflow pauses cleanly and asks for continuation instead of running forever.
 Check that:
 
 - Ollama is running
-- the configured or overridden `ollama_base_url` is correct
+- the configured or overridden `api_base_url` is correct
 - the selected model exists locally
 
 ### Hosted provider authentication fails

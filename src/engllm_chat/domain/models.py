@@ -27,7 +27,7 @@ ChatAssistantCompletionState = Literal["complete", "interrupted"]
 
 _PROVIDER_DEFAULT_API_BASE_URLS: dict[ChatProvider, str | None] = {
     "mock": None,
-    "ollama": None,
+    "ollama": "http://127.0.0.1:11434",
     "openai": "https://api.openai.com/v1",
     "xai": "https://api.x.ai/v1",
     "anthropic": "https://api.anthropic.com/v1/",
@@ -63,13 +63,23 @@ class ChatLLMConfig(DomainModel):
     provider: ChatProvider = "ollama"
     model_name: str = "qwen2.5:7b-instruct"
     temperature: float = 0.1
-    ollama_base_url: str = "http://127.0.0.1:11434"
     api_base_url: str | None = None
     timeout_seconds: float = 60.0
     api_key_env_var: str | None = None
     prompt_for_api_key_if_missing: bool = True
 
-    @field_validator("model_name", "ollama_base_url")
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_ollama_base_url(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if "api_base_url" not in value and "ollama_base_url" in value:
+            migrated = dict(value)
+            migrated["api_base_url"] = migrated.pop("ollama_base_url")
+            return migrated
+        return value
+
+    @field_validator("model_name")
     @classmethod
     def validate_non_empty_strings(cls, value: str) -> str:
         cleaned = value.strip()

@@ -304,7 +304,7 @@ def test_create_chat_llm_client_supports_mock_and_ollama() -> None:
             ChatLLMConfig(provider="ollama", model_name="qwen"),
             provider="ollama",
             model_name="qwen3",
-            ollama_base_url="http://localhost:11434",
+            api_base_url="http://localhost:11434",
             timeout_seconds=12.0,
         )
         assert isinstance(ollama_client, OpenAICompatibleChatLLMClient)

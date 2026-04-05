@@ -266,7 +266,6 @@ class ChatScreen(Screen[None]):
                 self._config.llm,
                 provider=self._config.llm.provider,
                 model_name=self._config.llm.model_name,
-                ollama_base_url=self._config.llm.ollama_base_url,
                 api_base_url=self._config.llm.api_base_url,
                 timeout_seconds=self._config.llm.timeout_seconds,
                 api_key=self._credential_secret,

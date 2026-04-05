@@ -77,7 +77,6 @@ Supported runtime overrides for v1:
   - `--provider {ollama,mock,openai,xai,anthropic,gemini}`
   - `--model <name>`
   - `--temperature <float>`
-  - `--ollama-base-url <url>`
   - `--api-base-url <url>`
 - session limits:
   - `--max-context-tokens <int>`
@@ -139,7 +138,7 @@ llm:
   provider: ollama
   model_name: qwen2.5:7b-instruct
   temperature: 0.1
-  ollama_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434
   api_base_url: null
   timeout_seconds: 60.0
   api_key_env_var: null

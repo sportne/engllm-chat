@@ -29,7 +29,7 @@ Create a chat config file:
 llm:
   provider: ollama
   model_name: qwen2.5:7b-instruct
-  ollama_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434
 ```
 
 Launch chat:

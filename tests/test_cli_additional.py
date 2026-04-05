@@ -15,7 +15,7 @@ def _fake_chat_config() -> ChatConfig:
                 "provider": "ollama",
                 "model_name": "qwen",
                 "temperature": 0.1,
-                "ollama_base_url": "http://127.0.0.1:11434",
+                "api_base_url": "http://127.0.0.1:11434",
             }
         }
     )
