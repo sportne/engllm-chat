@@ -40,6 +40,9 @@ def _extract_action(
     message: Any,
 ) -> BaseModel:
     parsed = getattr(message, "parsed", None)
+    # Prefer the SDK-native parsed payload when it is available, but keep a raw
+    # text fallback so the adapter still works with providers that only return
+    # the JSON envelope as assistant content.
     if isinstance(parsed, BaseModel):
         return parsed
     if isinstance(parsed, dict):
@@ -86,6 +89,9 @@ def _extract_chat_turn_result(
     action_envelope = _extract_action(action_response_model, message)
     action = getattr(action_envelope, "action", None)
     if action is None:
+        # Some providers may hand back a parsed final response directly. We keep
+        # accepting that path so the workflow contract stays stable even when
+        # provider parsing behavior varies.
         if isinstance(action_envelope, response_model):
             raw_text = (
                 _extract_message_text(message).strip()

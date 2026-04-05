@@ -31,6 +31,8 @@ def _build_continuation_result(
     token_usage: ChatTokenUsage | None,
     reason: str,
 ) -> ChatWorkflowTurnResult:
+    # Continuation is a first-class workflow outcome: the turn made progress,
+    # but intentionally stopped at a configured boundary instead of failing.
     return ChatWorkflowTurnResult(
         status="needs_continuation",
         new_messages=new_messages,
@@ -48,6 +50,8 @@ def _build_interrupted_result(
     token_usage: ChatTokenUsage | None,
     reason: str,
 ) -> ChatWorkflowTurnResult:
+    # Interruption is also represented as normal state so the UI can render the
+    # partial transcript instead of treating cancellation like an exception.
     return ChatWorkflowTurnResult(
         status="interrupted",
         new_messages=new_messages,
@@ -76,6 +80,9 @@ def _finalize_session_turn_result(
     context_warning: str | None,
     system_message: ChatMessage,
 ) -> ChatWorkflowTurnResult:
+    # Session finalization always appends the new turn, then recomputes active
+    # context and token summaries from session state rather than trusting
+    # transient per-turn values.
     updated_turns = [*session_state.turns, _build_turn_record(turn_result)]
     updated_session_state = ChatSessionState(
         turns=updated_turns,

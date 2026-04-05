@@ -402,6 +402,9 @@ def get_file_info_impl(
 ) -> FileInfoResult | FileInfoBatchResult:
     """Return deterministic metadata for one or more root-confined files."""
 
+    # `get_file_info` is intentionally separate from `read_file`: the model can
+    # inspect size/readability metadata first and choose a safer next step
+    # before asking for the actual content.
     if isinstance(path, str):
         return _get_single_file_info_impl(
             root_path,
@@ -464,6 +467,9 @@ def read_file_impl(
 ) -> FileReadResult:
     """Return bounded text or markdown content for one root-confined file."""
 
+    # `read_file` is the content-returning tool. It depends on the prior
+    # metadata and readable-content checks so full reads and ranged reads stay
+    # bounded and predictable.
     resolved_request = _resolve_file_path(root_path, path)
     loaded_content = load_readable_content(resolved_request.resolved)
     file_info = _build_file_info_result(

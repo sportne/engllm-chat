@@ -4,14 +4,15 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 
 ## Next up
 
-- [ ] Add a major documentation and teaching pass for less-experienced developers
-  - Expand the project docs with substantial narrative Markdown aimed at readers who are not experienced software developers.
-  - Explain the architecture, the schema-first action loop, the provider abstraction, and the deterministic tool layer in plain language.
-  - Add dedicated architecture and onboarding docs that show how one chat turn moves through the system end to end.
-  - Document how to design structured LLM calls, how tool schemas are defined, and how tool results flow back into the conversation.
-  - Add significant explanatory code comments in places where the patterns are important but not obvious from the code alone.
-  - Review the code and design for areas that are unnecessarily hard for newer developers to follow, and simplify or reshape them where that would materially improve clarity.
-  - Treat the project not only as a usable tool, but also as a reference implementation for building this kind of system.
+- [x] Complete the major documentation and teaching pass for less-experienced developers
+  - [x] Add architecture and onboarding docs that show how one chat turn moves through the system end to end.
+  - [x] Add a reference-implementation guide that explains the bigger design lessons behind the project.
+  - [x] Document the schema-first action loop and the deterministic tool layer in plain language.
+  - [x] Add contributor-facing architecture and extension guides.
+  - [x] Add testing/debugging guidance and a dedicated chat config reference.
+  - [x] Add a glossary for project terminology used across the docs.
+  - [x] Add teaching-oriented code comments in the main workflow/provider/tool boundaries.
+  - [x] Polish README and cross-links so the docs form a clearer learning path.
 
 ## Product and behavior follow-ups
 
@@ -60,3 +61,4 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 - [x] Split the domain model layer into grouped internal modules while keeping `domain/models.py` as the public facade.
 - [x] Added a repeatable chat smoke test with verbose LLM logging support.
 - [x] Generalized the smoke test path so it can target hosted providers such as Gemini.
+- [x] Completed the contributor-reference and teaching-oriented documentation pass.

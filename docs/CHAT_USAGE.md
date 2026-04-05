@@ -46,6 +46,21 @@ Hosted-provider defaults:
 - `gemini`: `GEMINI_API_KEY`,
   `https://generativelanguage.googleapis.com/v1beta/openai/`
 
+## Which Provider Should I Use?
+
+Use:
+
+- `mock` when you want deterministic local testing with no network access
+- `ollama` when you want a real local model and easy experimentation
+- hosted providers when you want stronger remote models or need to compare
+  behavior across provider ecosystems
+
+For most development work:
+
+- start with `mock` for deterministic tests
+- use `ollama` for local real-provider workflow checks
+- use a hosted provider when you specifically want to verify hosted behavior
+
 ## Setup
 
 From the repository root:
@@ -78,7 +93,6 @@ llm:
   model_name: qwen2.5:7b-instruct
   temperature: 0.1
   api_base_url: http://127.0.0.1:11434
-  api_base_url: null
   timeout_seconds: 60.0
   api_key_env_var: null
   prompt_for_api_key_if_missing: true
@@ -165,6 +179,23 @@ engllm-chat interactive . --config chat.yaml \
   --max-file-size-characters 400000 \
   --max-tool-result-chars 30000
 ```
+
+## When To Change Session Or Tool Limits
+
+Change session limits when:
+
+- the model keeps returning continuation results because it ran out of tool
+  rounds or total tool budget
+- you want more or fewer prior turns kept in active context
+
+Change tool limits when:
+
+- directory listings are too shallow or too truncated to be useful
+- text searches return too few matches
+- large-file handling is too conservative for the repo you are exploring
+
+Keep in mind that raising limits can make turns slower and can increase the
+amount of context the model has to reason over.
 
 ## Using The Textual UI
 
@@ -269,6 +300,7 @@ make smoke-chat SMOKE_PROVIDER=gemini SMOKE_MODEL=gemini-2.5-flash
 ```
 
 If you want the full structured summary, you can also run the module directly.
+
 Ollama example:
 
 ```bash
@@ -342,36 +374,40 @@ workflow pauses cleanly and asks for continuation instead of running forever.
 
 ## Troubleshooting
 
-### `Cannot connect to Ollama`
+## Missing API keys
 
-Check that:
+If a hosted provider fails before startup or during the first request:
 
-- Ollama is running
-- the configured or overridden `api_base_url` is correct
-- the selected model exists locally
+- check that the expected environment variable is set
+- check `api_key_env_var` in config if you overrode the default
+- confirm the selected provider matches the key you exported
 
-### Hosted provider authentication fails
+## Ollama not reachable
 
-Check that:
+If Ollama requests fail:
 
-- the matching API key environment variable is set
-- the selected model name belongs to that provider
-- the configured or overridden `api_base_url` is correct when using a proxy or
-  compatibility gateway
+- make sure the Ollama server is running
+- confirm the base URL matches the local server
+- make sure the selected model exists locally
+- if you override the URL, make sure it points at the shared `/v1`-compatible path
 
-### The model stops before answering
+## Model answers without grounding
 
-This usually means one of the configured safety limits was reached:
+If the model answers implementation questions without tool use:
 
-- `max_tool_round_trips`
-- `max_tool_calls_per_round`
-- `max_total_tool_calls_per_turn`
-- `max_context_tokens`
+- rerun a smoke test with `--require-tool-call`
+- enable `--verbose-llm` to inspect the first returned action
+- check whether the question is specific enough to strongly suggest code evidence
 
-Increase the relevant limit if you want the agent to explore more before it
-must stop.
+## Tool-budget continuation results
 
-### The model cannot read a large file
+If a turn ends with `needs_continuation`:
+
+- the workflow hit a configured safety boundary
+- check the session tool-round and total tool-call limits
+- decide whether the limits are too low or the model is taking too many low-value steps
+
+## Large files are not fully readable
 
 This is expected when a file exceeds:
 
@@ -382,7 +418,7 @@ This is expected when a file exceeds:
 In those cases, ask narrower questions or let the model read only a character
 range from the file.
 
-### Hidden files are not being considered
+## Hidden files are not being considered
 
 Set:
 
@@ -391,13 +427,14 @@ source_filters:
   include_hidden: true
 ```
 
-### The app starts but asks for a credential
+## The app starts but asks for a credential
 
 This depends on provider config. The value entered in the startup modal is
 session-only and is not written back to config or disk.
 
-## Related Docs
+## Related Reference Docs
 
+- `docs/CHAT_CONFIG_REFERENCE.md`
+- `docs/TESTING_AND_DEBUGGING.md`
+- `docs/ARCHITECTURE.md`
 - `docs/CHAT_SPEC.md`
-- `docs/CHAT_PLAN.md`
-- `docs/USAGE.md`

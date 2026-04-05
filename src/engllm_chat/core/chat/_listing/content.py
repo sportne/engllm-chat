@@ -79,6 +79,9 @@ def load_readable_content(
         )
 
     try:
+        # The conversion path exists so document-like files can still become
+        # deterministic readable text before the rest of the tool limits are
+        # applied.
         converted = convert_with_markitdown(path)
     except Exception as exc:
         return _LoadedReadableContent(
@@ -128,6 +131,8 @@ def _effective_full_read_char_limit(
     configured_limit = tool_limits.max_read_file_chars
     if configured_limit is not None:
         return configured_limit
+    # Character counts matter more than raw bytes here because the model
+    # ultimately consumes text in the prompt, not filesystem bytes on disk.
     return max(1, session_config.max_context_tokens * 4)
 
 

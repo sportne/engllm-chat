@@ -17,6 +17,9 @@ def _serialize_chat_message(message: ChatMessage) -> dict[str, object]:
     if message.role == "tool":
         if message.tool_result is None:
             raise LLMError("Tool chat message missing tool_result")
+        # Tool results are flattened into plain user-visible content so the
+        # runtime contract stays provider-neutral instead of depending on native
+        # tool result payload formats.
         return {
             "role": "user",
             "content": (
@@ -27,6 +30,9 @@ def _serialize_chat_message(message: ChatMessage) -> dict[str, object]:
 
     payload: dict[str, object] = {"role": message.role}
     if message.role == "assistant" and message.tool_calls:
+        # Assistant tool requests are also represented as normal content. The
+        # workflow still understands them structurally, but providers only see a
+        # consistent chat transcript.
         request_text = json.dumps(
             [tool_call.model_dump(mode="json") for tool_call in message.tool_calls],
             sort_keys=True,

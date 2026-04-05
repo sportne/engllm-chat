@@ -1,8 +1,9 @@
 # engllm-chat
 
-`engllm-chat` is a standalone extraction of the EngLLM interactive repository
-chat feature. It provides a Textual chat UI over one directory root plus a
-small OpenAI-compatible API probe utility.
+`engllm-chat` is a terminal chat tool for exploring one directory root with a
+safe, read-only toolset. It provides a Textual chat UI, deterministic
+filesystem tools, support for local and hosted providers, and a small
+OpenAI-compatible API probe utility.
 
 ## Features
 
@@ -67,19 +68,38 @@ defaults:
 
 You can also override a hosted endpoint explicitly with `--api-base-url`.
 
-Additional usage details live in [docs/CHAT_USAGE.md](docs/CHAT_USAGE.md).
+## Docs
 
-Helpful next docs:
+### Start here
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a high-level system map and
-  one-turn walkthrough
-- [docs/LLM_STRUCTURED_CALLS.md](docs/LLM_STRUCTURED_CALLS.md) for the
-  schema-first provider interaction pattern used by the chat workflow
-- [docs/DETERMINISTIC_TOOLS.md](docs/DETERMINISTIC_TOOLS.md) for the read-only
-  filesystem tool layer and its safety rules
-- [docs/CONTRIBUTING_CHAT_ARCHITECTURE.md](docs/CONTRIBUTING_CHAT_ARCHITECTURE.md)
-  for where to make changes safely when extending the system
 - [docs/CHAT_USAGE.md](docs/CHAT_USAGE.md) for setup, runtime overrides, and
   smoke-test usage
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a high-level system map and
+  one-turn walkthrough
+- [docs/CHAT_CONFIG_REFERENCE.md](docs/CHAT_CONFIG_REFERENCE.md) for every
+  config setting and practical defaults
+
+### Build a system like this
+
+- [docs/REFERENCE_IMPLEMENTATION.md](docs/REFERENCE_IMPLEMENTATION.md) for the
+  bigger design lessons behind the project
+- [docs/LLM_STRUCTURED_CALLS.md](docs/LLM_STRUCTURED_CALLS.md) for the
+  schema-first provider interaction pattern
+- [docs/DETERMINISTIC_TOOLS.md](docs/DETERMINISTIC_TOOLS.md) for the read-only
+  filesystem tool layer and its safety rules
+- [docs/GLOSSARY.md](docs/GLOSSARY.md) for project terminology
+
+### Contribute or extend it
+
+- [docs/CONTRIBUTING_CHAT_ARCHITECTURE.md](docs/CONTRIBUTING_CHAT_ARCHITECTURE.md)
+  for where changes belong
+- [docs/EXTENDING_CHAT_SYSTEM.md](docs/EXTENDING_CHAT_SYSTEM.md) for step-by-step
+  extension guidance
 - [docs/CHAT_SPEC.md](docs/CHAT_SPEC.md) for the detailed feature and safety
   specification
+
+### Run and debug it
+
+- [docs/TESTING_AND_DEBUGGING.md](docs/TESTING_AND_DEBUGGING.md) for tests,
+  smoke runs, and debugging guidance
+- [docs/CHAT_PLAN.md](docs/CHAT_PLAN.md) for historical implementation context

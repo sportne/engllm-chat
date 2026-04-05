@@ -122,6 +122,9 @@ class ChatSessionTurnRunner:
             last_token_usage = response.token_usage
 
             if self._cancel_requested:
+                # If the user interrupts after the provider returns but before we
+                # append the assistant message, we stop cleanly without inventing
+                # partial assistant state that never entered the transcript.
                 result = _build_interrupted_result(
                     new_messages=new_messages,
                     tool_results=tool_results,
@@ -201,6 +204,9 @@ class ChatSessionTurnRunner:
                     )
                     yield self._finalized_event(result=result)
                     return
+                # Once a tool request is already part of the conversation, we
+                # preserve that state and only interrupt at the boundaries around
+                # tool execution rather than trying to rewind the transcript.
                 tool_result = execute_chat_tool_call(
                     tool_call,
                     root_path=self._root_path,
