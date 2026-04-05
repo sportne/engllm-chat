@@ -42,6 +42,8 @@ class ChatLLMConfig(DomainModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_ollama_base_url(cls, value: object) -> object:
+        # This keeps older local configs working while the rest of the project
+        # consistently talks about provider-neutral API base URLs.
         if not isinstance(value, dict):
             return value
         if "api_base_url" not in value and "ollama_base_url" in value:
@@ -95,6 +97,8 @@ class ChatLLMConfig(DomainModel):
     def credential_prompt_metadata(self) -> ChatCredentialPromptMetadata:
         """Return UI-safe credential-prompt metadata derived from config."""
 
+        # The UI gets prompt policy and env-var names, but never receives a
+        # persisted secret value from the config layer.
         return ChatCredentialPromptMetadata(
             provider=self.provider,
             api_key_env_var=self.resolved_api_key_env_var(),

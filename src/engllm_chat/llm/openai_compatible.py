@@ -1,4 +1,10 @@
-"""OpenAI-compatible chat provider implementation."""
+"""OpenAI-compatible chat provider implementation.
+
+This file stays as the public façade even though most of the implementation now
+lives in ``llm._openai_compatible``. That keeps imports stable for the rest of
+the project and makes this module the best place to start when learning how the
+provider adapter fits together.
+"""
 
 from __future__ import annotations
 
@@ -115,6 +121,9 @@ class OpenAICompatibleChatLLMClient:
     def generate_chat_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
         """Send one non-streaming chat turn to an OpenAI-compatible provider."""
 
+        # We ask the provider for one schema-validated action at a time rather
+        # than using provider-native tool calling. The action envelope is the
+        # stable contract that the workflow understands across providers.
         action_response_model = _build_chat_turn_action_model(
             request.response_model,
             request.tools,
@@ -123,6 +132,8 @@ class OpenAICompatibleChatLLMClient:
         last_schema_error: Exception | None = None
 
         for attempt_index in range(_MAX_SCHEMA_ATTEMPTS):
+            # Tool results stay in the normal chat transcript as plain messages,
+            # so every provider sees the same conversation shape.
             serialized_messages = [
                 _serialize_chat_message(message) for message in request_messages
             ]
@@ -171,6 +182,8 @@ class OpenAICompatibleChatLLMClient:
                         "OpenAI-compatible provider failed to return a valid "
                         f"structured response after {_MAX_SCHEMA_ATTEMPTS} attempts: {exc}"
                     ) from exc
+                # Corrective feedback is appended as another user message so the
+                # retry loop stays provider-neutral and easy to replay in tests.
                 request_messages.append(_build_schema_retry_feedback(str(exc)))
                 continue
 

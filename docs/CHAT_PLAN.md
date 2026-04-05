@@ -1,5 +1,17 @@
 # Directory Chat Implementation Plan
 
+This document is a historical implementation plan for the original standalone
+chat extraction work. It is useful for understanding how the project was
+sequenced, but it is not the primary onboarding document for the current
+codebase.
+
+For current architecture and contributor guidance, start with:
+
+- `docs/ARCHITECTURE.md`
+- `docs/LLM_STRUCTURED_CALLS.md`
+- `docs/DETERMINISTIC_TOOLS.md`
+- `docs/CONTRIBUTING_CHAT_ARCHITECTURE.md`
+
 ## Summary
 
 This plan adds a new local-first interactive tool, `engllm-chat`, for

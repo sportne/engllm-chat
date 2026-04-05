@@ -4,43 +4,10 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 
 ## Next up
 
-- [x] Further reduce [`workflow.py`](./src/engllm_chat/tools/chat/workflow.py)
-  - Extract session context preparation and trimming helpers.
-  - Extract token estimation/accounting helpers.
-  - Extract turn finalization and continuation/interruption helpers.
-  - Consider moving `ChatSessionTurnRunner` into its own module if `workflow.py` still feels dense after helper extraction.
-  - Keep exported workflow entrypoints and runtime behavior unchanged.
-
-- [x] Split [`openai_compatible.py`](./src/engllm_chat/llm/openai_compatible.py) by concern
-  - Separate request/message serialization.
-  - Separate schema model construction and retry feedback helpers.
-  - Separate response parsing and token-usage extraction.
-  - Keep `OpenAICompatibleChatLLMClient` as the public entrypoint.
-  - Preserve schema-first action handling, retry behavior, verbose logging, and Ollama normalization.
-
-- [x] Split [`domain/models.py`](./src/engllm_chat/domain/models.py) into grouped internal modules
-  - Separate provider/config models.
-  - Separate chat protocol/message models.
-  - Separate response/citation/token usage models.
-  - Keep `domain/models.py` as a compatibility re-export layer so imports do not churn.
-
-- [ ] Split [`smoke_chat.py`](./src/engllm_chat/smoke_chat.py) into smaller helper modules
-  - Isolate CLI parser construction.
-  - Isolate config resolution.
-  - Isolate smoke execution and expectation validation.
-  - Isolate output formatting.
-  - Keep the current CLI flags and `python -m engllm_chat.smoke_chat` behavior unchanged.
-
-- [ ] Split [`probe_openai_api.py`](./src/engllm_chat/probe_openai_api.py) into internal modules
-  - Separate SDK loading and exception classification.
-  - Separate probe catalog/spec registration.
-  - Separate individual probe implementations.
-  - Separate CLI formatting/output.
-  - Keep probe behavior stable while making the code easier to navigate.
-
-- [ ] After the modularity passes, add a major documentation and teaching pass
-  - Expand the project docs with substantial narrative Markdown aimed at less-experienced developers.
+- [ ] Add a major documentation and teaching pass for less-experienced developers
+  - Expand the project docs with substantial narrative Markdown aimed at readers who are not experienced software developers.
   - Explain the architecture, the schema-first action loop, the provider abstraction, and the deterministic tool layer in plain language.
+  - Add dedicated architecture and onboarding docs that show how one chat turn moves through the system end to end.
   - Document how to design structured LLM calls, how tool schemas are defined, and how tool results flow back into the conversation.
   - Add significant explanatory code comments in places where the patterns are important but not obvious from the code alone.
   - Review the code and design for areas that are unnecessarily hard for newer developers to follow, and simplify or reshape them where that would materially improve clarity.
@@ -51,6 +18,11 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 - [ ] Tighten the probe utility output so it distinguishes required runtime APIs from optional or extra OpenAI-compatible capabilities.
 
 - [ ] Continue improving prompt/tool-selection behavior so models prefer source-code evidence over docs-heavy evidence for implementation questions.
+
+- [ ] Decide later whether smoke/probe should stay as packaged modules or become script-first utilities
+  - `scripts/chat_smoke.py`, `scripts/ollama_chat_smoke.py`, and `scripts/openai_api_probe.py` already provide script entrypoints.
+  - Keep the current packaged implementations under `src/engllm_chat/` for now because tests import them directly, the CLI imports `probe_openai_api`, and docs/Make targets already point at the packaged module path.
+  - If we revisit this later, do it as a separate packaging and entrypoint cleanup rather than as part of the modularity roadmap.
 
 - [ ] Do integrated end-to-end testing of the Textual chat client and user experience
   - Exercise the actual Textual app with the full workflow, provider layer, prompts, and deterministic tools wired together.

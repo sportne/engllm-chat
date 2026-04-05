@@ -1,4 +1,9 @@
-"""Per-turn chat orchestration loop."""
+"""Per-turn chat orchestration loop.
+
+This façade keeps the public workflow entrypoints easy to find. Most helper
+logic lives in ``tools.chat._workflow`` so contributors can learn the top-level
+turn flow here before diving into the lower-level details.
+"""
 
 from __future__ import annotations
 
@@ -52,6 +57,8 @@ def run_chat_turn(
     tool_definitions = build_chat_tool_definitions()
 
     while True:
+        # Each provider round must yield exactly one structured action: either a
+        # tool request or a final response.
         response = llm_client.generate_chat_turn(
             ChatTurnRequest(
                 messages=messages,
@@ -118,6 +125,8 @@ def run_chat_turn(
             new_messages.append(tool_message)
 
         round_count += 1
+        # Continuation is treated as a normal workflow outcome rather than as an
+        # exception, which keeps tool-budget limits explicit in the UI.
         if round_count >= config.session.max_tool_round_trips:
             return _build_continuation_result(
                 new_messages=new_messages,

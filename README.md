@@ -68,3 +68,18 @@ defaults:
 You can also override a hosted endpoint explicitly with `--api-base-url`.
 
 Additional usage details live in [docs/CHAT_USAGE.md](docs/CHAT_USAGE.md).
+
+Helpful next docs:
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a high-level system map and
+  one-turn walkthrough
+- [docs/LLM_STRUCTURED_CALLS.md](docs/LLM_STRUCTURED_CALLS.md) for the
+  schema-first provider interaction pattern used by the chat workflow
+- [docs/DETERMINISTIC_TOOLS.md](docs/DETERMINISTIC_TOOLS.md) for the read-only
+  filesystem tool layer and its safety rules
+- [docs/CONTRIBUTING_CHAT_ARCHITECTURE.md](docs/CONTRIBUTING_CHAT_ARCHITECTURE.md)
+  for where to make changes safely when extending the system
+- [docs/CHAT_USAGE.md](docs/CHAT_USAGE.md) for setup, runtime overrides, and
+  smoke-test usage
+- [docs/CHAT_SPEC.md](docs/CHAT_SPEC.md) for the detailed feature and safety
+  specification

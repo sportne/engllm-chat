@@ -11,6 +11,8 @@ from .tokens import _estimate_messages_tokens, _flatten_turn_messages
 
 
 def _build_system_message(config: ChatConfig) -> ChatMessage:
+    # The system prompt is rebuilt from centralized prompt code each turn so
+    # workflow code never becomes the hidden source of prompt instructions.
     return ChatMessage(
         role="system",
         content=build_chat_system_prompt(
@@ -32,6 +34,9 @@ def _prepare_session_context(
     active_context_start_turn = session_state.active_context_start_turn
     context_warning: str | None = None
     while active_context_start_turn < len(session_state.turns):
+        # Context trimming happens a whole turn at a time so the visible session
+        # history remains coherent instead of dropping random individual
+        # messages from the middle of a turn.
         prior_messages = _flatten_turn_messages(
             session_state.turns[active_context_start_turn:]
         )

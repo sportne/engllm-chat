@@ -1,4 +1,10 @@
-"""Deterministic read-only directory listing tools for chat."""
+"""Deterministic read-only directory listing tools for chat.
+
+This façade keeps the public import path stable while the internal
+implementation lives in ``core.chat._listing``. It also owns the markitdown
+conversion seam so tests can monkeypatch conversion behavior in one obvious
+place.
+"""
 
 from __future__ import annotations
 
@@ -68,6 +74,8 @@ def _convert_with_markitdown(path: Path) -> str:
 
 
 def _load_readable_content(path: Path) -> _LoadedReadableContent:
+    # Non-text documents are converted to cached markdown before the rest of
+    # the tool layer applies the usual readable-content size checks.
     return load_readable_content(
         path,
         markitdown_cache_path=_markitdown_cache_path,

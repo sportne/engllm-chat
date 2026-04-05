@@ -48,6 +48,8 @@ class ChatToolResult(DomainModel):
 
     @model_validator(mode="after")
     def validate_error_fields(self) -> ChatToolResult:
+        # Downstream code branches on status alone, so we keep the error shape
+        # strict here instead of forcing every consumer to re-check it.
         if self.status == "error" and not (self.error_message or "").strip():
             raise ValueError("error_message is required when tool result status=error")
         if self.status == "ok" and self.error_message is not None:
@@ -84,6 +86,8 @@ class ChatMessage(DomainModel):
             return self
 
         if self.role == "assistant":
+            # Assistant messages are allowed to be "tool request only" messages,
+            # which is how the provider hands the workflow its next action.
             if (
                 self.completion_state == "complete"
                 and not has_content
@@ -98,6 +102,8 @@ class ChatMessage(DomainModel):
 
         if self.tool_calls:
             raise ValueError("tool messages cannot include tool calls")
+        # Tool results travel back through the transcript as a dedicated message
+        # role rather than through provider-native tool result payloads.
         if self.tool_result is None:
             raise ValueError("tool messages must include a tool result")
         if self.completion_state != "complete":

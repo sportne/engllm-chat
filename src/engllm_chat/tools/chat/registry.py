@@ -1,4 +1,9 @@
-"""Internal registry and dispatch helpers for chat tools."""
+"""Internal registry and dispatch helpers for chat tools.
+
+The registry is the single source of truth for the model-facing tool catalog
+and the runtime dispatch path. Keeping those two concerns together helps the
+prompt/tool definitions stay aligned with what the workflow can actually run.
+"""
 
 from __future__ import annotations
 
@@ -195,6 +200,8 @@ def get_chat_tool_spec(name: str) -> ChatToolSpec | None:
 def build_chat_tool_definitions() -> list[ChatToolDefinition]:
     """Return provider-facing tool definitions derived from the registry."""
 
+    # The prompt builder and the workflow both consume this same derived view,
+    # which avoids prompt/runtime drift when tools are added or renamed.
     return [
         ChatToolDefinition(
             name=spec.name,
@@ -225,6 +232,8 @@ def execute_chat_tool_call(
         )
 
     try:
+        # We validate once at the chat boundary, then hand typed arguments to
+        # deterministic core-chat code that knows nothing about providers.
         arguments = spec.argument_model.model_validate(tool_call.arguments)
         payload_model = spec.runner(arguments, root_path, config)
         return ChatToolResult(

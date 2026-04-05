@@ -1,5 +1,16 @@
 # Directory Chat Tool Specification
 
+This document is the detailed product and safety specification that guided the
+feature work. It is still useful as a reference, but it is not the best place
+to start if you are trying to understand the current codebase.
+
+For current implementation guidance, start with:
+
+- `docs/ARCHITECTURE.md`
+- `docs/LLM_STRUCTURED_CALLS.md`
+- `docs/DETERMINISTIC_TOOLS.md`
+- `docs/CONTRIBUTING_CHAT_ARCHITECTURE.md`
+
 ## 1. Overview
 
 `engllm-chat` is a new local-first command-line tool for interactive question
