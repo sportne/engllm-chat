@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import urllib.parse
@@ -29,6 +30,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 OpenAI: Any = _openai_sdk
 _MAX_SCHEMA_ATTEMPTS = 3
+_LOGGER = logging.getLogger("engllm_chat.llm.openai_compatible")
 
 
 def normalize_ollama_base_url(base_url: str | None) -> str:
@@ -253,6 +255,20 @@ def _build_schema_retry_feedback(error_message: str) -> ChatMessage:
     )
 
 
+def _to_loggable_payload(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {str(key): _to_loggable_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_loggable_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_loggable_payload(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
 class OpenAICompatibleChatLLMClient:
     """Chat adapter for providers exposing an OpenAI-compatible API surface."""
 
@@ -264,6 +280,7 @@ class OpenAICompatibleChatLLMClient:
         base_url: str | None,
         timeout_seconds: float = 60.0,
         api_key: str | None = None,
+        verbose_logging: bool = False,
     ) -> None:
         if OpenAI is None:
             raise LLMError(
@@ -280,10 +297,49 @@ class OpenAICompatibleChatLLMClient:
 
         self._model_name = model_name
         self._provider_name = provider_name
+        self._verbose_logging = verbose_logging
         self._client = OpenAI(
             api_key=api_token,
             base_url=base_url,
             timeout=timeout_seconds,
+        )
+
+    def _log_request_messages(
+        self,
+        *,
+        model_name: str,
+        attempt_index: int,
+        messages: list[dict[str, object]],
+    ) -> None:
+        if not self._verbose_logging:
+            return
+        _LOGGER.info(
+            "LLM request -> provider=%s model=%s attempt=%s\n%s",
+            self._provider_name,
+            model_name,
+            attempt_index + 1,
+            json.dumps(messages, indent=2, sort_keys=True),
+        )
+
+    def _log_response_message(
+        self,
+        *,
+        model_name: str,
+        message: Any,
+    ) -> None:
+        if not self._verbose_logging:
+            return
+
+        parsed = getattr(message, "parsed", None)
+        payload = {
+            "content": _extract_message_text(message),
+            "parsed": _to_loggable_payload(parsed),
+        }
+        _LOGGER.info(
+            "LLM response <- provider=%s model=%s\n%s",
+            self._provider_name,
+            model_name,
+            json.dumps(payload, indent=2, sort_keys=True),
         )
 
     def generate_chat_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
@@ -297,14 +353,20 @@ class OpenAICompatibleChatLLMClient:
         last_schema_error: Exception | None = None
 
         for attempt_index in range(_MAX_SCHEMA_ATTEMPTS):
+            serialized_messages = [
+                _serialize_chat_message(message) for message in request_messages
+            ]
             payload: dict[str, object] = {
                 "model": request.model_name or self._model_name,
-                "messages": [
-                    _serialize_chat_message(message) for message in request_messages
-                ],
+                "messages": serialized_messages,
                 "temperature": request.temperature,
                 "response_format": action_response_model,
             }
+            self._log_request_messages(
+                model_name=str(payload["model"]),
+                attempt_index=attempt_index,
+                messages=serialized_messages,
+            )
             try:
                 response = self._client.beta.chat.completions.parse(**payload)
             except Exception as exc:  # pragma: no cover - provider/network dependent
@@ -318,6 +380,10 @@ class OpenAICompatibleChatLLMClient:
             message = getattr(choice, "message", None)
             if message is None:
                 raise LLMError(f"{self._provider_name} response missing message")
+            self._log_response_message(
+                model_name=str(payload["model"]),
+                message=message,
+            )
 
             token_usage = _extract_token_usage(response)
             try:

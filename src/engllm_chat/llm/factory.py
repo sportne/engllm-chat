@@ -19,12 +19,18 @@ def create_chat_llm_client(
     api_base_url: str | None = None,
     timeout_seconds: float | None = None,
     api_key: str | None = None,
+    verbose_llm_logging: bool | None = None,
 ) -> ChatLLMClient:
     """Create a chat-capable provider client from chat config and overrides."""
 
     resolved_provider = provider or config.provider
     resolved_model = model_name or config.model_name
     resolved_timeout = timeout_seconds or config.timeout_seconds
+    resolved_verbose_logging = (
+        config.verbose_llm_logging
+        if verbose_llm_logging is None
+        else verbose_llm_logging
+    )
 
     if resolved_provider == "mock":
         return MockLLMClient(model_name=resolved_model)
@@ -38,6 +44,7 @@ def create_chat_llm_client(
             base_url=normalize_ollama_base_url(resolved_base_url),
             timeout_seconds=resolved_timeout,
             api_key=api_key,
+            verbose_logging=resolved_verbose_logging,
         )
 
     if resolved_provider in {"openai", "xai", "anthropic", "gemini"}:
@@ -49,6 +56,7 @@ def create_chat_llm_client(
             base_url=resolved_api_base_url,
             timeout_seconds=resolved_timeout,
             api_key=api_key,
+            verbose_logging=resolved_verbose_logging,
         )
 
     raise LLMError(f"Unsupported chat LLM provider '{resolved_provider}'")

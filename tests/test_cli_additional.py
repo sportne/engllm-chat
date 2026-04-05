@@ -26,9 +26,15 @@ def test_interactive_cli_launches_app_with_overrides(
 ) -> None:
     cli_module = __import__("engllm_chat.cli.main", fromlist=["main"])
     captured: dict[str, object] = {}
+    logging_flags: list[bool] = []
 
     monkeypatch.setattr(
         cli_module, "load_chat_config", lambda _path: _fake_chat_config()
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_configure_verbose_llm_logging",
+        lambda enabled: logging_flags.append(enabled),
     )
 
     def _fake_launch_chat_app(*, root_path, config, llm_client=None):
@@ -53,6 +59,7 @@ def test_interactive_cli_launches_app_with_overrides(
             "0.3",
             "--api-base-url",
             "https://proxy.example/v1",
+            "--verbose-llm",
             "--max-context-tokens",
             "1234",
             "--max-file-size-characters",
@@ -67,10 +74,12 @@ def test_interactive_cli_launches_app_with_overrides(
     assert resolved.llm.model_name == "grok-4-fast"
     assert resolved.llm.temperature == 0.3
     assert resolved.llm.api_base_url == "https://proxy.example/v1"
+    assert resolved.llm.verbose_llm_logging is True
     assert resolved.session.max_context_tokens == 1234
     assert resolved.tool_limits.max_file_size_characters == 4096
     assert captured["root_path"] == tmp_path.resolve()
     assert captured["llm_client"] is None
+    assert logging_flags == [True]
 
 
 def test_interactive_cli_rejects_invalid_temperature(

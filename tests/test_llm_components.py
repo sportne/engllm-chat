@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from pydantic import BaseModel
 
@@ -343,6 +345,51 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
     assert response_format is not ChatFinalResponse
     assert "action" in response_format.model_fields
     assert "tools" not in _FakeOpenAIClient.captured_parse_payloads[-1]
+
+
+def test_openai_compatible_verbose_logging_emits_request_and_response_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_parse_responses = [
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="Hosted done",
+                parsed={
+                    "action": {
+                        "kind": "final_response",
+                        "response": {"answer": "Hosted done"},
+                    }
+                },
+            )
+        )
+    ]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+        verbose_logging=True,
+    )
+
+    with caplog.at_level(logging.INFO, logger="engllm_chat.llm.openai_compatible"):
+        client.generate_chat_turn(
+            ChatTurnRequest(
+                messages=[ChatMessage(role="user", content="hello from user")],
+                response_model=ChatFinalResponse,
+                model_name="gpt-test",
+            )
+        )
+
+    log_text = caplog.text
+    assert "LLM request -> provider=openai model=gpt-test attempt=1" in log_text
+    assert '"content": "hello from user"' in log_text
+    assert "LLM response <- provider=openai model=gpt-test" in log_text
+    assert '"answer": "Hosted done"' in log_text
 
 
 def test_openai_compatible_generate_chat_turn_parses_tool_calls(

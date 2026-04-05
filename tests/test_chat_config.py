@@ -30,6 +30,7 @@ def test_load_chat_config_defaults(tmp_path: Path) -> None:
     assert config.llm.provider == "ollama"
     assert config.llm.model_name == "qwen2.5:7b-instruct"
     assert config.llm.api_base_url is None
+    assert config.llm.verbose_llm_logging is False
     assert config.llm.resolved_api_base_url() == "http://127.0.0.1:11434"
     assert config.source_filters.include == []
     assert config.source_filters.exclude == []
@@ -110,11 +111,13 @@ def test_chat_llm_config_prefers_explicit_hosted_provider_overrides() -> None:
         model_name="grok-4",
         api_key_env_var="CUSTOM_XAI_TOKEN",
         api_base_url="https://example.test/v1",
+        verbose_llm_logging=True,
     )
 
     assert config.resolved_api_key_env_var() == "CUSTOM_XAI_TOKEN"
     assert config.resolved_api_base_url() == "https://example.test/v1"
     assert config.credential_prompt_metadata().api_key_env_var == "CUSTOM_XAI_TOKEN"
+    assert config.verbose_llm_logging is True
 
 
 def test_chat_llm_config_migrates_legacy_ollama_base_url_to_api_base_url() -> None:

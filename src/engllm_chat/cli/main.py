@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,6 +22,16 @@ def _resolve_temperature(raw_value: float | None, default: float) -> float:
     return resolved
 
 
+def _configure_verbose_llm_logging(enabled: bool) -> None:
+    if not enabled:
+        return
+
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("engllm_chat.llm.openai_compatible").setLevel(logging.INFO)
+
+
 def _resolve_chat_config(args: argparse.Namespace) -> ChatConfig:
     base_config = load_chat_config(args.config)
     raw = base_config.model_dump(mode="python")
@@ -37,6 +48,8 @@ def _resolve_chat_config(args: argparse.Namespace) -> ChatConfig:
     )
     if args.api_base_url is not None:
         raw["llm"]["api_base_url"] = args.api_base_url
+    if args.verbose_llm:
+        raw["llm"]["verbose_llm_logging"] = True
 
     session_overrides = {
         "max_context_tokens": args.max_context_tokens,
@@ -80,6 +93,7 @@ def _launch_chat_app(
 
 def _run_chat_interactive(args: argparse.Namespace) -> int:
     chat_config = _resolve_chat_config(args)
+    _configure_verbose_llm_logging(chat_config.llm.verbose_llm_logging)
     return _launch_chat_app(
         root_path=args.directory.resolve(),
         config=chat_config,
@@ -133,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     interactive.add_argument("--model", type=str)
     interactive.add_argument("--temperature", type=float)
     interactive.add_argument("--api-base-url", type=str)
+    interactive.add_argument("--verbose-llm", action="store_true")
     interactive.add_argument("--max-context-tokens", type=int)
     interactive.add_argument("--max-tool-round-trips", type=int)
     interactive.add_argument("--max-tool-calls-per-round", type=int)
