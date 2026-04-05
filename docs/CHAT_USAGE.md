@@ -3,7 +3,7 @@
 This guide covers how to start and use the interactive directory chat feature:
 
 ```bash
-engllm-chat interactive <directory> --config <path>
+engllm-chat <directory> --config <path>
 ```
 
 The chat tool is local-first, directory-scoped, and read-only. The model can
@@ -12,7 +12,7 @@ commands or modify your repository.
 
 ## What It Does
 
-`engllm-chat interactive` starts a Textual terminal app over one directory root.
+`engllm-chat` starts a Textual terminal app over one directory root.
 During a session, the model can:
 
 - list files and directories
@@ -127,20 +127,20 @@ ui:
 Run chat against the directory you want to inspect:
 
 ```bash
-.venv/bin/python -m engllm_chat interactive . --config chat.yaml
+.venv/bin/python -m engllm_chat . --config chat.yaml
 ```
 
 Or, after installation:
 
 ```bash
-engllm-chat interactive . --config chat.yaml
+engllm-chat . --config chat.yaml
 ```
 
 You can point the command at any directory:
 
 ```bash
-engllm-chat interactive src --config chat.yaml
-engllm-chat interactive /path/to/repo/subtree --config chat.yaml
+engllm-chat src --config chat.yaml
+engllm-chat /path/to/repo/subtree --config chat.yaml
 ```
 
 ## Common Runtime Overrides
@@ -148,7 +148,7 @@ engllm-chat interactive /path/to/repo/subtree --config chat.yaml
 CLI overrides take precedence over config values. The most useful overrides are:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M \
   --temperature 0.2 \
@@ -158,7 +158,7 @@ engllm-chat interactive . --config chat.yaml \
 Hosted providers can override the OpenAI-compatible endpoint explicitly:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider xai \
   --model grok-4-fast-reasoning \
   --api-base-url https://api.x.ai/v1
@@ -167,7 +167,7 @@ engllm-chat interactive . --config chat.yaml \
 You can also override session and tool limits at runtime:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --max-context-tokens 32000 \
   --max-tool-round-trips 10 \
   --max-tool-calls-per-round 4 \
@@ -245,7 +245,7 @@ you a final answer.
 Use the mock provider to test the UI and workflow without a live model:
 
 ```bash
-engllm-chat interactive . --config chat.yaml --provider mock --model mock-chat
+engllm-chat . --config chat.yaml --provider mock --model mock-chat
 ```
 
 This is useful for local smoke testing, UI checks, and deterministic debugging.
@@ -255,7 +255,7 @@ This is useful for local smoke testing, UI checks, and deterministic debugging.
 Use a local Ollama model:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M
 ```
@@ -263,7 +263,7 @@ engllm-chat interactive . --config chat.yaml \
 If you use a different Ollama endpoint:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M \
   --api-base-url http://localhost:11434
@@ -328,7 +328,7 @@ export GEMINI_API_KEY=...
 OpenAI:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider openai \
   --model gpt-5-mini
 ```
@@ -336,7 +336,7 @@ engllm-chat interactive . --config chat.yaml \
 xAI:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider xai \
   --model grok-4-fast-reasoning
 ```
@@ -344,7 +344,7 @@ engllm-chat interactive . --config chat.yaml \
 Anthropic:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider anthropic \
   --model claude-sonnet-4-5
 ```
@@ -352,7 +352,7 @@ engllm-chat interactive . --config chat.yaml \
 Gemini:
 
 ```bash
-engllm-chat interactive . --config chat.yaml \
+engllm-chat . --config chat.yaml \
   --provider gemini \
   --model gemini-2.5-flash
 ```

@@ -36,7 +36,7 @@ llm:
 Launch chat:
 
 ```bash
-engllm-chat interactive . --config chat.yaml
+engllm-chat . --config chat.yaml
 ```
 
 Probe an OpenAI-compatible endpoint:

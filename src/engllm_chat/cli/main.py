@@ -127,61 +127,75 @@ def _run_probe_openai_api(args: argparse.Namespace) -> int:
     return probe_openai_api_main(argv)
 
 
+def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument(
+        "--provider",
+        choices=["ollama", "mock", "openai", "xai", "anthropic", "gemini"],
+    )
+    parser.add_argument("--model", type=str)
+    parser.add_argument("--temperature", type=float)
+    parser.add_argument("--api-base-url", type=str)
+    parser.add_argument("--verbose-llm", action="store_true")
+    parser.add_argument("--max-context-tokens", type=int)
+    parser.add_argument("--max-tool-round-trips", type=int)
+    parser.add_argument("--max-tool-calls-per-round", type=int)
+    parser.add_argument("--max-total-tool-calls-per-turn", type=int)
+    parser.add_argument("--max-entries-per-call", type=int)
+    parser.add_argument("--max-recursive-depth", type=int)
+    parser.add_argument("--max-search-matches", type=int)
+    parser.add_argument("--max-read-lines", type=int)
+    parser.add_argument("--max-file-size-characters", type=int)
+    parser.add_argument("--max-tool-result-chars", type=int)
+    parser.set_defaults(run=_run_chat_interactive)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="engllm-chat",
         description="Interactive directory-scoped chat over repository files.",
+        epilog=(
+            "Launch chat by default with "
+            "`engllm-chat <directory> --config <path>`. "
+            "Use `engllm-chat probe-openai-api ...` for endpoint probing."
+        ),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_chat_arguments(parser)
+    return parser
 
-    interactive = subparsers.add_parser(
-        "interactive",
-        help="Start an interactive read-only chat session for one directory.",
-    )
-    interactive.add_argument("directory", type=Path)
-    interactive.add_argument("--config", required=True, type=Path)
-    interactive.add_argument(
-        "--provider",
-        choices=["ollama", "mock", "openai", "xai", "anthropic", "gemini"],
-    )
-    interactive.add_argument("--model", type=str)
-    interactive.add_argument("--temperature", type=float)
-    interactive.add_argument("--api-base-url", type=str)
-    interactive.add_argument("--verbose-llm", action="store_true")
-    interactive.add_argument("--max-context-tokens", type=int)
-    interactive.add_argument("--max-tool-round-trips", type=int)
-    interactive.add_argument("--max-tool-calls-per-round", type=int)
-    interactive.add_argument("--max-total-tool-calls-per-turn", type=int)
-    interactive.add_argument("--max-entries-per-call", type=int)
-    interactive.add_argument("--max-recursive-depth", type=int)
-    interactive.add_argument("--max-search-matches", type=int)
-    interactive.add_argument("--max-read-lines", type=int)
-    interactive.add_argument("--max-file-size-characters", type=int)
-    interactive.add_argument("--max-tool-result-chars", type=int)
-    interactive.set_defaults(run=_run_chat_interactive)
 
-    probe = subparsers.add_parser(
-        "probe-openai-api",
-        help="Probe an OpenAI-compatible endpoint for supported API surfaces.",
+def _build_probe_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="engllm-chat probe-openai-api",
+        description="Probe an OpenAI-compatible endpoint for supported API surfaces.",
     )
-    probe.add_argument("--base-url", required=True)
-    probe.add_argument("--api-key")
-    probe.add_argument("--text-model")
-    probe.add_argument("--embedding-model")
-    probe.add_argument("--image-model")
-    probe.add_argument("--tts-model")
-    probe.add_argument("--timeout-seconds", type=float)
-    probe.add_argument("--include-images", action="store_true")
-    probe.add_argument("--include-audio", action="store_true")
-    probe.add_argument("--json", action="store_true")
-    probe.add_argument("--no-progress", action="store_true")
-    probe.set_defaults(run=_run_probe_openai_api)
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--api-key")
+    parser.add_argument("--text-model")
+    parser.add_argument("--embedding-model")
+    parser.add_argument("--image-model")
+    parser.add_argument("--tts-model")
+    parser.add_argument("--timeout-seconds", type=float)
+    parser.add_argument("--include-images", action="store_true")
+    parser.add_argument("--include-audio", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--no-progress", action="store_true")
+    parser.set_defaults(run=_run_probe_openai_api)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    raw_args = list(argv) if argv is not None else sys.argv[1:]
+    if raw_args and raw_args[0] == "probe-openai-api":
+        parser = _build_probe_parser()
+        parse_args = raw_args[1:]
+    else:
+        parser = build_parser()
+        parse_args = (
+            raw_args[1:] if raw_args and raw_args[0] == "interactive" else raw_args
+        )
+    args = parser.parse_args(parse_args)
     try:
         return int(args.run(args))
     except EngLLMError as exc:

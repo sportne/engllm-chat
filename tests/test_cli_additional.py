@@ -21,9 +21,7 @@ def _fake_chat_config() -> ChatConfig:
     )
 
 
-def test_interactive_cli_launches_app_with_overrides(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_default_cli_launches_app_with_overrides(monkeypatch, tmp_path: Path) -> None:
     cli_module = __import__("engllm_chat.cli.main", fromlist=["main"])
     captured: dict[str, object] = {}
     logging_flags: list[bool] = []
@@ -47,7 +45,6 @@ def test_interactive_cli_launches_app_with_overrides(
 
     rc = main(
         [
-            "interactive",
             str(tmp_path),
             "--config",
             str(tmp_path / "chat.yaml"),
@@ -94,7 +91,6 @@ def test_interactive_cli_rejects_invalid_temperature(
 
     rc = main(
         [
-            "interactive",
             str(tmp_path),
             "--config",
             str(tmp_path / "chat.yaml"),
@@ -106,6 +102,31 @@ def test_interactive_cli_rejects_invalid_temperature(
     captured = capsys.readouterr()
     assert rc == 2
     assert "--temperature must be between 0.0 and 1.0" in captured.err
+
+
+def test_interactive_alias_still_launches_default_chat_flow(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cli_module = __import__("engllm_chat.cli.main", fromlist=["main"])
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli_module, "load_chat_config", lambda _path: _fake_chat_config()
+    )
+
+    def _fake_launch_chat_app(*, root_path, config, llm_client=None):
+        captured["root_path"] = root_path
+        captured["config"] = config
+        captured["llm_client"] = llm_client
+        return 0
+
+    monkeypatch.setattr(cli_module, "_launch_chat_app", _fake_launch_chat_app)
+
+    rc = main(["interactive", str(tmp_path), "--config", str(tmp_path / "chat.yaml")])
+
+    assert rc == 0
+    assert captured["root_path"] == tmp_path.resolve()
+    assert captured["llm_client"] is None
 
 
 def test_probe_subcommand_delegates_to_probe_module(monkeypatch) -> None:
