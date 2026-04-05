@@ -190,10 +190,17 @@ def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
     assert "Follow-up Suggestions:" in formatted
 
     entry = TranscriptEntry(role="assistant", text="draft")
+    assert entry.has_class("transcript-entry")
+    assert entry.has_class("assistant")
     entry.update_text("partial", assistant_completion_state="interrupted")
     assert "Assistant (interrupted):" in str(entry.render())
     assert "partial" in str(entry.render())
+    user_entry = TranscriptEntry(role="user", text="question")
+    assert user_entry.has_class("transcript-entry")
+    assert user_entry.has_class("user")
     assert "Error: nope" in str(TranscriptEntry(role="error", text="nope").render())
+    assert ".transcript-entry.user" in ChatScreen.DEFAULT_CSS
+    assert ".transcript-entry.assistant" in ChatScreen.DEFAULT_CSS
 
 
 def test_chat_app_launches_with_shell_layout_and_startup_message(
@@ -208,11 +215,27 @@ def test_chat_app_launches_with_shell_layout_and_startup_message(
         async with app.run_test() as pilot:
             await pilot.pause()
             screen = app.screen
+            chat_layout = screen.query_one("#chat-layout")
+            assert [child.id for child in chat_layout.children] == [
+                "transcript",
+                "status-bar",
+                "composer-row",
+                "footer-bar",
+            ]
             screen.query_one("#transcript", VerticalScroll)
+            status_bar = screen.query_one("#status-bar", Static)
+            composer_row = screen.query_one("#composer-row")
+            composer_actions = screen.query_one("#composer-actions")
             screen.query_one("#composer", TextArea)
             screen.query_one("#send-button", Button)
             screen.query_one("#stop-button", Button)
-            screen.query_one("#status-bar", Static)
+            assert status_bar.parent is chat_layout
+            assert composer_row.parent is chat_layout
+            assert composer_actions.parent is composer_row
+            assert [child.id for child in composer_actions.children] == [
+                "send-button",
+                "stop-button",
+            ]
             footer = _static_text(screen, "#footer-bar")
             assert "Enter send" in footer
             assert "Shift+Enter newline" in footer

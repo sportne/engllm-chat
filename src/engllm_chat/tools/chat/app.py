@@ -63,6 +63,96 @@ def _format_final_response(response: ChatFinalResponse) -> str:
 class ChatScreen(Screen[None]):
     """Main chat screen with transcript, composer, status, and footer rows."""
 
+    DEFAULT_CSS = """
+    ChatScreen {
+        background: #111317;
+        color: #e6e6e6;
+    }
+
+    #chat-layout {
+        layout: vertical;
+    }
+
+    #transcript {
+        height: 1fr;
+        padding: 1 1 0 1;
+    }
+
+    .transcript-entry {
+        width: 100%;
+        margin: 0 0 1 0;
+        padding: 0 1;
+        background: #17191d;
+    }
+
+    .transcript-entry.user {
+        background: #1a2028;
+        border-left: tall #4f6f96;
+    }
+
+    .transcript-entry.assistant {
+        background: #171b1f;
+        border-left: tall #4f8a7d;
+    }
+
+    .transcript-entry.system {
+        background: #16161a;
+        color: #b8bec8;
+        border-left: tall #5b5f66;
+    }
+
+    .transcript-entry.error {
+        background: #261718;
+        color: #f3d8d9;
+        border-left: tall #b76363;
+    }
+
+    #status-bar {
+        height: 1;
+        min-height: 1;
+        margin: 0 1;
+        padding: 0 1;
+        color: #d4e6ff;
+        background: #1a2330;
+    }
+
+    #composer-row {
+        height: 11;
+        margin: 0 1;
+        layout: horizontal;
+    }
+
+    #composer {
+        width: 1fr;
+    }
+
+    #composer-actions {
+        width: 11;
+        height: auto;
+        margin-left: 1;
+        layout: vertical;
+    }
+
+    #composer-actions Button {
+        width: 100%;
+        height: 3;
+        min-height: 3;
+        margin-bottom: 1;
+    }
+
+    #stop-button {
+        margin-bottom: 0;
+    }
+
+    #footer-bar {
+        height: 1;
+        min-height: 1;
+        margin: 0 1 1 1;
+        padding: 0 1;
+        color: #c7c7c7;
+    }
+    """
+
     def __init__(
         self,
         *,
@@ -92,11 +182,17 @@ class ChatScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-layout"):
             yield VerticalScroll(id="transcript")
+            yield Static("", id="status-bar")
             with Horizontal(id="composer-row"):
                 yield ComposerTextArea("", id="composer")
-                yield Button("Send", id="send-button", variant="primary")
-                yield Button("Stop", id="stop-button", variant="warning", disabled=True)
-            yield Static("", id="status-bar")
+                with Vertical(id="composer-actions"):
+                    yield Button("Send", id="send-button", variant="primary")
+                    yield Button(
+                        "Stop",
+                        id="stop-button",
+                        variant="warning",
+                        disabled=True,
+                    )
             yield Static("", id="footer-bar")
 
     def on_mount(self) -> None:
