@@ -43,7 +43,14 @@ from engllm_chat.tools.chat.models import (
 
 def _transcript_texts(app: ChatApp) -> list[str]:
     transcript = app.screen.query_one("#transcript", VerticalScroll)
-    return [str(child.render()) for child in transcript.children]
+    return [
+        str(getattr(child, "renderable", child.render()))
+        for child in transcript.children
+    ]
+
+
+def _static_text(screen: ChatScreen, selector: str) -> str:
+    return str(screen.query_one(selector, Static).renderable)
 
 
 def _completed_result(
@@ -191,7 +198,7 @@ def test_chat_app_launches_with_shell_layout_and_startup_message(
             screen.query_one("#send-button", Button)
             screen.query_one("#stop-button", Button)
             screen.query_one("#status-bar", Static)
-            footer = str(screen.query_one("#footer-bar", Static).content)
+            footer = _static_text(screen, "#footer-bar")
             assert "Enter send" in footer
             assert "Shift+Enter newline" in footer
             transcript_texts = _transcript_texts(app)
@@ -224,7 +231,7 @@ def test_chat_app_enter_sends_and_updates_transcript_and_footer(tmp_path: Path) 
             transcript_texts = _transcript_texts(app)
             assert any("You:\nWhat is here?" in text for text in transcript_texts)
             assert any("Assistant:\nDone" in text for text in transcript_texts)
-            footer = str(screen.query_one("#footer-bar", Static).content)
+            footer = _static_text(screen, "#footer-bar")
             assert "session tokens: 9" in footer
             assert "active context tokens: 360" in footer
             assert "confidence: 0.50" in footer
@@ -288,7 +295,7 @@ def test_chat_app_multiline_draft_and_status_updates_stay_out_of_transcript(
             )
             assert all("thinking" not in text for text in transcript_texts)
             assert all("drafting answer" not in text for text in transcript_texts)
-            status = str(screen.query_one("#status-bar", Static).content)
+            status = _static_text(screen, "#status-bar")
             assert status == ""
             app.exit()
             await pilot.pause()
@@ -374,7 +381,7 @@ def test_chat_app_stop_action_visibility_and_busy_send_interrupt_modal(
             screen._active_stream = _FakeCancelableStream()  # type: ignore[assignment]
             screen._refresh_footer()
             assert stop_button.disabled is False
-            footer = str(screen.query_one("#footer-bar", Static).content)
+            footer = _static_text(screen, "#footer-bar")
             assert "Stop active turn" in footer
             composer = screen.query_one("#composer", ComposerTextArea)
             composer.load_text("replacement draft")
@@ -592,7 +599,7 @@ def test_chat_app_handle_turn_error_resets_busy_state_and_focus(tmp_path: Path) 
             assert screen._busy is False
             assert screen._active_stream is None
             assert screen._active_assistant_entry is None
-            assert str(screen.query_one("#status-bar", Static).content) == ""
+            assert _static_text(screen, "#status-bar") == ""
             assert app.focused is screen.query_one("#composer", ComposerTextArea)
             app.exit()
             await pilot.pause()
