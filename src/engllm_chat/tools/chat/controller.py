@@ -14,8 +14,10 @@ from engllm_chat.tools.chat.models import (
     ChatWorkflowTurnResult,
 )
 from engllm_chat.tools.chat.presentation import (
+    AssistantMarkdownEntry,
     TranscriptEntry,
     format_final_response,
+    format_final_response_markdown,
 )
 from engllm_chat.tools.chat.screens import (
     ComposerTextArea,
@@ -91,6 +93,18 @@ class ChatScreenController:
         transcript.scroll_end(animate=False)
         return entry
 
+    def append_assistant_markdown(
+        self, markdown_text: str, *, fallback_text: str
+    ) -> AssistantMarkdownEntry | TranscriptEntry:
+        transcript = self._screen.query_one("#transcript", VerticalScroll)
+        try:
+            entry = AssistantMarkdownEntry(markdown_text=markdown_text)
+            transcript.mount(entry)
+            transcript.scroll_end(animate=False)
+            return entry
+        except Exception:
+            return self.append_transcript("assistant", fallback_text)
+
     def set_status(self, text: str) -> None:
         self._screen.query_one("#status-bar", Static).update(text)
 
@@ -163,33 +177,17 @@ class ChatScreenController:
         typed_event = ChatWorkflowStatusEvent.model_validate(event)
         self.set_status(typed_event.status)
 
-    def start_assistant_reveal(self, text: str) -> None:
-        self._screen._reveal_generation += 1
-        generation = self._screen._reveal_generation
-        if self._screen._active_assistant_entry is None:
-            self._screen._active_assistant_entry = self.append_transcript(
-                "assistant", ""
-            )
-        else:
-            self._screen._active_assistant_entry.update_text(
-                "", assistant_completion_state="complete"
-            )
+    def show_final_response(self, result: ChatWorkflowTurnResult) -> None:
+        """Render completed final responses as markdown instead of plain text."""
 
-        chunk_size = max(1, len(text) // 24) if text else 1
-
-        def _step(index: int) -> None:
-            if generation != self._screen._reveal_generation:
-                return
-            next_index = min(len(text), index + chunk_size)
-            if self._screen._active_assistant_entry is not None:
-                self._screen._active_assistant_entry.update_text(
-                    text[:next_index],
-                    assistant_completion_state="complete",
-                )
-            if next_index < len(text):
-                self._screen.set_timer(0.01, lambda: _step(next_index))
-
-        _step(0)
+        final_response = result.final_response
+        if final_response is None:
+            return
+        self._screen._active_assistant_entry = None
+        self.append_assistant_markdown(
+            format_final_response_markdown(final_response),
+            fallback_text=format_final_response(final_response),
+        )
 
     def handle_turn_result(self, event: object) -> None:
         typed_event = ChatWorkflowResultEvent.model_validate(event)
@@ -206,9 +204,7 @@ class ChatScreenController:
         ):
             self.append_transcript("system", typed_result.continuation_reason)
         if typed_result.final_response is not None:
-            self.start_assistant_reveal(
-                format_final_response(typed_result.final_response)
-            )
+            self.show_final_response(typed_result)
         elif typed_result.status == "interrupted":
             interrupted_message = next(
                 (
@@ -292,7 +288,6 @@ class ChatScreenController:
         self.clear_composer()
         if self.handle_inline_command(raw_draft):
             return
-        self._screen._reveal_generation += 1
         self.append_transcript("user", raw_draft)
         self._screen._active_assistant_entry = None
         self._screen._busy = True

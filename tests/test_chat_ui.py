@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("textual")
 
 from textual.containers import VerticalScroll
-from textual.widgets import Button, Input, Static, TextArea
+from textual.widgets import Button, Input, Markdown, Static, TextArea
 
 from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import (
@@ -24,6 +24,7 @@ from engllm_chat.domain.models import (
 )
 from engllm_chat.llm.mock import MockLLMClient
 from engllm_chat.tools.chat.app import (
+    AssistantMarkdownEntry,
     ChatApp,
     ChatScreen,
     ComposerTextArea,
@@ -32,6 +33,7 @@ from engllm_chat.tools.chat.app import (
     TranscriptEntry,
     _format_citation,
     _format_final_response,
+    _format_final_response_markdown,
     run_chat_app,
 )
 from engllm_chat.tools.chat.models import (
@@ -44,10 +46,17 @@ from engllm_chat.tools.chat.models import (
 
 def _transcript_texts(app: ChatApp) -> list[str]:
     transcript = app.screen.query_one("#transcript", VerticalScroll)
-    return [
-        str(getattr(child, "renderable", child.render()))
-        for child in transcript.children
-    ]
+    texts: list[str] = []
+    for child in transcript.children:
+        if isinstance(child, AssistantMarkdownEntry):
+            texts.append(child.transcript_text)
+            continue
+        texts.append(str(getattr(child, "renderable", child.render())))
+    return texts
+
+
+def _assistant_markdown_entries(screen: ChatScreen) -> list[AssistantMarkdownEntry]:
+    return list(screen.query(AssistantMarkdownEntry))
 
 
 def _static_text(screen: ChatScreen, selector: str) -> str:
@@ -188,6 +197,20 @@ def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
     assert "Uncertainty:" in formatted
     assert "Missing Information:" in formatted
     assert "Follow-up Suggestions:" in formatted
+    markdown_formatted = _format_final_response_markdown(
+        ChatFinalResponse(
+            answer="1. **Done** with `code`",
+            citations=[ChatCitation(source_path=Path("src/app.py"), line_start=2)],
+            uncertainty=["Unclear"],
+            missing_information=["TBD"],
+            follow_up_suggestions=["Inspect src"],
+        )
+    )
+    assert markdown_formatted.startswith("1. **Done** with `code`")
+    assert "### Citations" in markdown_formatted
+    assert "### Uncertainty" in markdown_formatted
+    assert "### Missing Information" in markdown_formatted
+    assert "### Follow-up Suggestions" in markdown_formatted
 
     entry = TranscriptEntry(role="assistant", text="draft")
     assert entry.has_class("transcript-entry")
@@ -199,8 +222,13 @@ def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
     assert user_entry.has_class("transcript-entry")
     assert user_entry.has_class("user")
     assert "Error: nope" in str(TranscriptEntry(role="error", text="nope").render())
+    markdown_entry = AssistantMarkdownEntry(markdown_text="1. **Bold** and `code`")
+    assert markdown_entry.has_class("transcript-entry")
+    assert markdown_entry.has_class("assistant")
+    assert markdown_entry.transcript_text.startswith("Assistant:\n1. **Bold**")
     assert ".transcript-entry.user" in ChatScreen.DEFAULT_CSS
     assert ".transcript-entry.assistant" in ChatScreen.DEFAULT_CSS
+    assert ".assistant-markdown-body" in ChatScreen.DEFAULT_CSS
 
 
 def test_chat_app_launches_with_shell_layout_and_startup_message(
@@ -767,9 +795,87 @@ def test_chat_app_completed_answer_renders_labeled_sections(tmp_path: Path) -> N
             await pilot.pause()
             assistant_text = "\n\n".join(_transcript_texts(app))
             assert "Assistant:\nDone" in assistant_text
-            assert "Uncertainty:\n- Unsure" in assistant_text
-            assert "Missing Information:\n- Missing" in assistant_text
-            assert "Follow-up Suggestions:\n- Next" in assistant_text
+            assert "### Uncertainty\n- Unsure" in assistant_text
+            assert "### Missing Information\n- Missing" in assistant_text
+            assert "### Follow-up Suggestions\n- Next" in assistant_text
+            assistant_entries = _assistant_markdown_entries(screen)
+            assert len(assistant_entries) == 1
+            markdown_widget = assistant_entries[0].query_one(Markdown)
+            assert assistant_entries[0].markdown_text.startswith("Done")
+            assert markdown_widget is not None
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_completed_answer_uses_markdown_widget_and_falls_back_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._handle_turn_result(
+                _result_event(
+                    _completed_result(
+                        user_message="question",
+                        answer="1. **Bold** answer with `code`",
+                    )
+                )
+            )
+            await pilot.pause()
+
+            assistant_entries = _assistant_markdown_entries(screen)
+            assert len(assistant_entries) == 1
+            assert assistant_entries[0].markdown_text.startswith(
+                "1. **Bold** answer with `code`"
+            )
+            assert assistant_entries[0].query_one(Markdown) is not None
+
+            class _BrokenAssistantMarkdownEntry:
+                def __init__(self, *, markdown_text: str) -> None:
+                    del markdown_text
+                    raise RuntimeError("boom")
+
+            monkeypatch.setattr(
+                "engllm_chat.tools.chat.controller.AssistantMarkdownEntry",
+                _BrokenAssistantMarkdownEntry,
+            )
+
+            screen._handle_turn_result(
+                _result_event(
+                    ChatWorkflowTurnResult(
+                        status="completed",
+                        new_messages=[
+                            ChatMessage(role="user", content="question"),
+                            ChatMessage(role="assistant", content='{"answer":"Done"}'),
+                        ],
+                        final_response=ChatFinalResponse(
+                            answer="Fallback answer",
+                            uncertainty=["Unsure"],
+                            confidence=0.6,
+                        ),
+                        session_state=ChatSessionState(),
+                    )
+                )
+            )
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any(
+                "Assistant:\nFallback answer\n\nUncertainty:\n- Unsure" in text
+                for text in transcript_texts
+            )
+            assert len(_assistant_markdown_entries(screen)) == 1
             app.exit()
             await pilot.pause()
 

@@ -25,9 +25,11 @@ from engllm_chat.tools.chat.models import (
     ChatWorkflowStatusEvent,
 )
 from engllm_chat.tools.chat.presentation import (
+    AssistantMarkdownEntry,
     TranscriptEntry,
     format_citation,
     format_final_response,
+    format_final_response_markdown,
 )
 from engllm_chat.tools.chat.screens import (
     ComposerTextArea,
@@ -42,12 +44,14 @@ from engllm_chat.tools.chat.workflow import (
 __all__ = [
     "ChatApp",
     "ChatScreen",
+    "AssistantMarkdownEntry",
     "ComposerTextArea",
     "CredentialModal",
     "InterruptConfirmModal",
     "TranscriptEntry",
     "_format_citation",
     "_format_final_response",
+    "_format_final_response_markdown",
     "run_chat_app",
 ]
 
@@ -58,6 +62,10 @@ def _format_citation(citation: ChatCitation) -> str:
 
 def _format_final_response(response: ChatFinalResponse) -> str:
     return format_final_response(response)
+
+
+def _format_final_response_markdown(response: ChatFinalResponse) -> str:
+    return format_final_response_markdown(response)
 
 
 class ChatScreen(Screen[None]):
@@ -105,6 +113,22 @@ class ChatScreen(Screen[None]):
         background: #261718;
         color: #f3d8d9;
         border-left: tall #b76363;
+    }
+
+    .transcript-entry-label {
+        width: 100%;
+        padding: 0 1;
+        color: #f2f5f8;
+        text-style: bold;
+        background: transparent;
+    }
+
+    .assistant-markdown-body {
+        width: 100%;
+        padding: 0 1 1 1;
+        color: #e6e6e6;
+        background: transparent;
+        overflow-y: hidden;
     }
 
     #status-bar {
@@ -176,7 +200,6 @@ class ChatScreen(Screen[None]):
         self._footer_session_tokens: int | None = None
         self._footer_active_context_tokens: int | None = None
         self._footer_confidence: float | None = None
-        self._reveal_generation = 0
         self._controller = ChatScreenController(self)
 
     def compose(self) -> ComposeResult:
@@ -277,9 +300,6 @@ class ChatScreen(Screen[None]):
 
     def _handle_turn_status(self, event: object) -> None:
         self._controller.handle_turn_status(event)
-
-    def _start_assistant_reveal(self, text: str) -> None:
-        self._controller.start_assistant_reveal(text)
 
     def _handle_turn_result(self, event: object) -> None:
         self._controller.handle_turn_result(event)
