@@ -4,14 +4,14 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 
 ## Next up
 
-- [ ] Further reduce [`workflow.py`](./src/engllm_chat/tools/chat/workflow.py)
+- [x] Further reduce [`workflow.py`](./src/engllm_chat/tools/chat/workflow.py)
   - Extract session context preparation and trimming helpers.
   - Extract token estimation/accounting helpers.
   - Extract turn finalization and continuation/interruption helpers.
   - Consider moving `ChatSessionTurnRunner` into its own module if `workflow.py` still feels dense after helper extraction.
   - Keep exported workflow entrypoints and runtime behavior unchanged.
 
-- [ ] Split [`openai_compatible.py`](./src/engllm_chat/llm/openai_compatible.py) by concern
+- [x] Split [`openai_compatible.py`](./src/engllm_chat/llm/openai_compatible.py) by concern
   - Separate request/message serialization.
   - Separate schema model construction and retry feedback helpers.
   - Separate response parsing and token-usage extraction.
@@ -83,5 +83,7 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 - [x] Extracted the internal chat tool registry from workflow.
 - [x] Split the Textual chat app into presentation, screens, and controller modules.
 - [x] Split deterministic chat tool listing logic into a moderate internal `_listing` package while keeping `listing.py` as the public facade.
+- [x] Split the chat workflow into internal helper modules while keeping `workflow.py` as the public facade.
+- [x] Split the OpenAI-compatible adapter into internal helper modules while keeping `openai_compatible.py` as the public facade.
 - [x] Added a repeatable chat smoke test with verbose LLM logging support.
 - [x] Generalized the smoke test path so it can target hosted providers such as Gemini.
