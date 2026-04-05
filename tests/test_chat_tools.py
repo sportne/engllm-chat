@@ -436,6 +436,26 @@ def test_search_text_supports_subtree_scoped_search(tmp_path: Path) -> None:
     assert [match.path for match in result.matches] == ["src/pkg/module.py"]
 
 
+def test_search_text_supports_searching_one_file_directly(tmp_path: Path) -> None:
+    _write(tmp_path / "src" / "pkg" / "module.py", "needle\nmiss\nneedle again\n")
+    _write(tmp_path / "src" / "other.py", "needle elsewhere\n")
+
+    result = search_text(
+        tmp_path,
+        "needle",
+        path="src/pkg/module.py",
+        source_filters=ChatSourceFilters(),
+        tool_limits=ChatToolLimits(),
+    )
+
+    assert result.requested_path == "src/pkg/module.py"
+    assert result.resolved_path == "src/pkg/module.py"
+    assert [(match.path, match.line_number) for match in result.matches] == [
+        ("src/pkg/module.py", 1),
+        ("src/pkg/module.py", 3),
+    ]
+
+
 def test_search_text_is_case_sensitive_and_returns_matching_line_only(
     tmp_path: Path,
 ) -> None:
@@ -550,7 +570,7 @@ def test_search_text_truncates_results(tmp_path: Path) -> None:
     assert result.truncated is True
 
 
-def test_search_text_rejects_escape_missing_file_root_and_blank_query(
+def test_search_text_rejects_escape_missing_root_and_blank_query(
     tmp_path: Path,
 ) -> None:
     _write(tmp_path / "file.txt", "needle\n")
@@ -566,7 +586,9 @@ def test_search_text_rejects_escape_missing_file_root_and_blank_query(
             tool_limits=ChatToolLimits(),
         )
 
-    with pytest.raises(RepositoryError, match="Requested directory does not exist"):
+    with pytest.raises(
+        RepositoryError, match="Requested file or directory does not exist"
+    ):
         search_text(
             tmp_path,
             "needle",
@@ -575,11 +597,13 @@ def test_search_text_rejects_escape_missing_file_root_and_blank_query(
             tool_limits=ChatToolLimits(),
         )
 
-    with pytest.raises(RepositoryError, match="Requested path is not a directory"):
+    with pytest.raises(
+        RepositoryError, match="Requested file or directory does not exist"
+    ):
         search_text(
             tmp_path,
             "needle",
-            "file.txt",
+            "missing.txt",
             source_filters=ChatSourceFilters(),
             tool_limits=ChatToolLimits(),
         )
@@ -664,6 +688,34 @@ def test_get_file_info_reports_unsupported_binary_files(tmp_path: Path) -> None:
     assert result.estimated_token_count is None
     assert result.within_size_limit is False
     assert result.can_read_full is False
+
+
+def test_get_file_info_supports_batched_paths_and_per_item_errors(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "notes.txt", "alpha beta\n")
+    _write(tmp_path / "other.txt", "second file\n")
+
+    result = get_file_info(
+        tmp_path,
+        ["notes.txt", "missing.txt", "other.txt"],
+        session_config=ChatSessionConfig(max_context_tokens=20),
+        tool_limits=ChatToolLimits(),
+    )
+
+    assert [item.requested_path for item in result.results] == [
+        "notes.txt",
+        "missing.txt",
+        "other.txt",
+    ]
+    assert result.results[0].status == "ok"
+    assert result.results[0].resolved_path == "notes.txt"
+    assert result.results[0].character_count == len("alpha beta\n")
+    assert result.results[1].status == "error"
+    assert result.results[1].resolved_path == ""
+    assert "does not exist" in (result.results[1].error_message or "")
+    assert result.results[2].status == "ok"
+    assert result.results[2].resolved_path == "other.txt"
 
 
 def test_read_file_returns_full_text_for_small_files(tmp_path: Path) -> None:

@@ -125,7 +125,7 @@ def _run_get_file_info(
     typed_args = GetFileInfoArgs.model_validate(args.model_dump())
     return get_file_info(
         root_path,
-        typed_args.path,
+        typed_args.path if typed_args.path is not None else typed_args.paths or [],
         session_config=config.session,
         tool_limits=config.tool_limits,
     )
@@ -172,7 +172,10 @@ _TOOL_SPECS: tuple[_ChatToolSpec, ...] = (
     ),
     _ChatToolSpec(
         name="get_file_info",
-        description="Inspect one file before deciding whether or how to read it.",
+        description=(
+            "Inspect one file or a small batch of files before deciding whether "
+            "or how to read them."
+        ),
         argument_model=GetFileInfoArgs,
         runner=_run_get_file_info,
     ),

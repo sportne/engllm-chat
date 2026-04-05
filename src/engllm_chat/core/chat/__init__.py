@@ -11,6 +11,7 @@ from .listing import (
 from .models import (
     DirectoryEntry,
     DirectoryListingResult,
+    FileInfoBatchResult,
     FileInfoResult,
     FileMatch,
     FileReadResult,
@@ -22,6 +23,7 @@ from .models import (
 __all__ = [
     "DirectoryEntry",
     "DirectoryListingResult",
+    "FileInfoBatchResult",
     "FileMatch",
     "FileInfoResult",
     "FileReadResult",

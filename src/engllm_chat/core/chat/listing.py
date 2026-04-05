@@ -12,6 +12,7 @@ from engllm_chat.core.chat.models import (
     DirectoryEntry,
     DirectoryEntryType,
     DirectoryListingResult,
+    FileInfoBatchResult,
     FileInfoResult,
     FileInfoStatus,
     FileMatch,
@@ -617,9 +618,96 @@ def search_text(
     source_filters: ChatSourceFilters,
     tool_limits: ChatToolLimits,
 ) -> TextSearchResult:
-    """Return matching text lines beneath one root-confined directory subtree."""
+    """Return matching text lines within one root-confined directory or file."""
 
     normalized_query = _normalize_required_value(query, field_name="search_text query")
+    normalized_path = _normalize_requested_path(path)
+    requested_path = Path(normalized_path)
+    if requested_path.is_absolute():
+        raise RepositoryError("Chat tool paths must be relative to the configured root")
+
+    resolved_root = root_path.resolve()
+    candidate_target = resolved_root / requested_path
+    resolved_target = candidate_target.resolve()
+    try:
+        resolved_relative = resolved_target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise RepositoryError(
+            "Requested chat tool path escapes the configured root"
+        ) from exc
+
+    if candidate_target.is_symlink():
+        symlink_kind = (
+            "directory"
+            if resolved_target.exists() and resolved_target.is_dir()
+            else "file"
+        )
+        raise RepositoryError(
+            f"Requested path must not be a symlinked {symlink_kind}: {normalized_path}"
+        )
+    if not candidate_target.exists():
+        raise RepositoryError(
+            f"Requested file or directory does not exist: {normalized_path}"
+        )
+
+    if resolved_target.is_file():
+        resolved_path = (
+            resolved_relative.as_posix() if resolved_relative.as_posix() else "."
+        )
+        resolved_request = _ResolvedRootPath(
+            root=resolved_root,
+            candidate=candidate_target,
+            resolved=resolved_target,
+            requested_path=normalized_path,
+            resolved_path=resolved_path,
+        )
+        loaded_content = _load_readable_content(resolved_request.resolved)
+        if loaded_content.status != "ok" or loaded_content.content is None:
+            return TextSearchResult(
+                requested_path=resolved_request.requested_path,
+                resolved_path=resolved_request.resolved_path,
+                query=normalized_query,
+                matches=[],
+                truncated=False,
+            )
+        if not _is_within_character_limit(
+            loaded_content.content, tool_limits=tool_limits
+        ):
+            return TextSearchResult(
+                requested_path=resolved_request.requested_path,
+                resolved_path=resolved_request.resolved_path,
+                query=normalized_query,
+                matches=[],
+                truncated=False,
+            )
+
+        file_matches: list[TextSearchMatch] = []
+        truncated = False
+        for line_number, line_text in enumerate(
+            loaded_content.content.splitlines(), start=1
+        ):
+            if normalized_query not in line_text:
+                continue
+            if len(file_matches) >= tool_limits.max_search_matches:
+                truncated = True
+                break
+            file_matches.append(
+                _build_text_search_match(
+                    resolved_request.root,
+                    resolved_request.resolved,
+                    line_number=line_number,
+                    line_text=line_text,
+                )
+            )
+
+        return TextSearchResult(
+            requested_path=resolved_request.requested_path,
+            resolved_path=resolved_request.resolved_path,
+            query=normalized_query,
+            matches=file_matches,
+            truncated=truncated,
+        )
+
     resolved_request = _resolve_directory_path(root_path, path)
     matches: list[TextSearchMatch] = []
     truncated = False
@@ -684,15 +772,13 @@ def search_text(
     )
 
 
-def get_file_info(
+def _get_single_file_info(
     root_path: Path,
     path: str,
     *,
     session_config: ChatSessionConfig,
     tool_limits: ChatToolLimits,
 ) -> FileInfoResult:
-    """Return deterministic metadata for one root-confined file."""
-
     resolved_request = _resolve_file_path(root_path, path)
     loaded_content = _load_readable_content(resolved_request.resolved)
     return _build_file_info_result(
@@ -707,6 +793,63 @@ def get_file_info(
         tool_limits=tool_limits,
         loaded_content=loaded_content,
     )
+
+
+def get_file_info(
+    root_path: Path,
+    path: str | list[str],
+    *,
+    session_config: ChatSessionConfig,
+    tool_limits: ChatToolLimits,
+) -> FileInfoResult | FileInfoBatchResult:
+    """Return deterministic metadata for one or more root-confined files."""
+
+    if isinstance(path, str):
+        return _get_single_file_info(
+            root_path,
+            path,
+            session_config=session_config,
+            tool_limits=tool_limits,
+        )
+
+    results: list[FileInfoResult] = []
+    for requested_path in path:
+        try:
+            result = _get_single_file_info(
+                root_path,
+                requested_path,
+                session_config=session_config,
+                tool_limits=tool_limits,
+            )
+        except RepositoryError as exc:
+            cleaned_path = requested_path.strip()
+            results.append(
+                FileInfoResult(
+                    requested_path=cleaned_path or requested_path,
+                    resolved_path="",
+                    name=Path(cleaned_path or requested_path).name,
+                    size_bytes=0,
+                    is_hidden=False,
+                    is_symlink=False,
+                    read_kind="unsupported",
+                    status="error",
+                    estimated_token_count=None,
+                    character_count=None,
+                    line_count=None,
+                    max_file_size_characters=tool_limits.max_file_size_characters,
+                    within_size_limit=False,
+                    full_read_char_limit=_effective_full_read_char_limit(
+                        session_config,
+                        tool_limits,
+                    ),
+                    can_read_full=False,
+                    error_message=str(exc),
+                )
+            )
+            continue
+        results.append(result)
+
+    return FileInfoBatchResult(results=results)
 
 
 def read_file(

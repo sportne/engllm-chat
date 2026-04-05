@@ -31,6 +31,7 @@ from engllm_chat.tools.chat.models import (
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
     FindFilesArgs,
+    GetFileInfoArgs,
     ReadFileArgs,
     SearchTextArgs,
 )
@@ -114,8 +115,11 @@ def test_build_chat_system_prompt_includes_tool_catalog_and_examples() -> None:
         assert tool_name in prompt
 
     assert "find_files(path='src', pattern='**/*.py')" in prompt
+    assert "search_text(path='.', query='provider')" in prompt
     assert "get_file_info(path='src/app.py')" in prompt
+    assert "get_file_info(paths=['src/app.py', 'src/config.py'])" in prompt
     assert "read_file(path='src/app.py', start_char=0, end_char=4000)" in prompt
+    assert "search_text(path='src/app.py', query='MySymbol')" in prompt
 
 
 def test_build_chat_system_prompt_mentions_ground_rules_and_final_response() -> None:
@@ -127,6 +131,15 @@ def test_build_chat_system_prompt_mentions_ground_rules_and_final_response() -> 
     assert "return exactly one structured action" in prompt
     assert "action.kind='tool_request'" in prompt
     assert "Request at most one tool per turn." in prompt
+    assert "path must never be blank" in prompt
+    assert "Use path='.' to operate on the entire configured root." in prompt
+    assert "find_files for matching file paths or file names" in prompt
+    assert "search_text for searching inside file contents" in prompt
+    assert "search_text accepts either a directory path or a single file path" in prompt
+    assert (
+        "get_file_info accepts either one file path or a list of file paths" in prompt
+    )
+    assert "do not repeat the same failing call" in prompt
 
     for field_name in (
         "answer",
@@ -166,6 +179,36 @@ def test_build_chat_system_prompt_is_deterministic_and_includes_limits() -> None
 def test_chat_prompt_exports_are_available() -> None:
     assert "chat" in prompt_namespaces
     assert callable(build_chat_system_prompt)
+
+
+def test_tool_argument_schemas_include_path_semantics_and_descriptions() -> None:
+    find_files_schema = FindFilesArgs.model_json_schema()
+    get_file_info_schema = GetFileInfoArgs.model_json_schema()
+    search_text_schema = SearchTextArgs.model_json_schema()
+    read_file_schema = ReadFileArgs.model_json_schema()
+
+    assert "Use '.' to search or list from the configured root" in str(
+        find_files_schema["properties"]["path"]["description"]
+    )
+    assert "file names and paths" in str(
+        find_files_schema["properties"]["pattern"]["description"]
+    )
+    assert "search within readable file contents" in str(
+        search_text_schema["properties"]["query"]["description"]
+    )
+    assert "directory path or within one specific file path" in str(
+        search_text_schema["properties"]["query"]["description"]
+    )
+    assert "Provide either path or paths" in str(
+        get_file_info_schema["properties"]["path"]["description"]
+    )
+    assert "multiple files in one tool call" in str(
+        get_file_info_schema["properties"]["paths"]["description"]
+    )
+    assert "file path" in str(read_file_schema["properties"]["path"]["description"])
+    assert "exclusive end character offset" in str(
+        read_file_schema["properties"]["end_char"]["description"]
+    )
 
 
 def test_run_chat_turn_returns_single_turn_final_response(tmp_path: Path) -> None:
@@ -330,6 +373,61 @@ def test_run_chat_turn_executes_multiple_tool_calls_in_order(tmp_path: Path) -> 
         result.new_messages[2].tool_result.payload["entries"][0]["path"] == "src/app.py"
     )
     assert result.new_messages[3].tool_result.payload["resolved_path"] == "src/app.py"
+
+
+def test_run_chat_turn_executes_batched_get_file_info(tmp_path: Path) -> None:
+    _write(tmp_path / "src" / "app.py", "print('hi')\n")
+    _write(tmp_path / "src" / "config.py", "DEBUG = True\n")
+    client = MockLLMClient(
+        chat_canned_turns=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    tool_calls=[
+                        ChatToolCall(
+                            call_id="call-1",
+                            tool_name="get_file_info",
+                            arguments={"paths": ["src/app.py", "src/config.py"]},
+                        )
+                    ],
+                ),
+                tool_calls=[
+                    ChatToolCall(
+                        call_id="call-1",
+                        tool_name="get_file_info",
+                        arguments={"paths": ["src/app.py", "src/config.py"]},
+                    )
+                ],
+                raw_text="",
+                finish_reason="tool_calls",
+            ),
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    content='{"answer":"Inspected both files"}',
+                ),
+                final_response=ChatFinalResponse(answer="Inspected both files"),
+                raw_text='{"answer":"Inspected both files"}',
+                finish_reason="final_response",
+            ),
+        ]
+    )
+
+    result = run_chat_turn(
+        user_message="Inspect app and config",
+        prior_messages=[],
+        root_path=tmp_path,
+        config=ChatConfig(),
+        llm_client=client,
+    )
+
+    assert result.status == "completed"
+    assert result.tool_results[0].tool_name == "get_file_info"
+    payload_results = result.tool_results[0].payload["results"]
+    assert [item["resolved_path"] for item in payload_results] == [
+        "src/app.py",
+        "src/config.py",
+    ]
 
 
 def test_run_chat_turn_unknown_tool_becomes_error_result_and_model_recovers(

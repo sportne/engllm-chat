@@ -95,6 +95,12 @@ class FileInfoResult(DomainModel):
     error_message: str | None = None
 
 
+class FileInfoBatchResult(DomainModel):
+    """Structured metadata for multiple root-confined files."""
+
+    results: list[FileInfoResult] = Field(default_factory=list)
+
+
 class FileReadResult(DomainModel):
     """Structured content read result for one root-confined file."""
 

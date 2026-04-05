@@ -14,8 +14,16 @@ _TOOL_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
         "List one directory subtree as a flat depth-first result.",
     ),
     ("find_files", "Find files by root-relative glob pattern."),
-    ("search_text", "Search readable file content for a literal substring."),
-    ("get_file_info", "Inspect one file before deciding whether or how to read it."),
+    (
+        "search_text",
+        "Search readable file content for a literal substring in one directory tree "
+        "or one file.",
+    ),
+    (
+        "get_file_info",
+        "Inspect one file or a small batch of files before deciding whether or how "
+        "to read them.",
+    ),
     (
         "read_file",
         "Read text or converted markdown content, optionally using "
@@ -58,6 +66,10 @@ def build_chat_system_prompt(
     usage_examples = "\n".join(
         (
             (
+                "- To search the entire repo by file contents: "
+                "search_text(path='.', query='provider')"
+            ),
+            (
                 "- To locate candidate files first: "
                 "find_files(path='src', pattern='**/*.py')"
             ),
@@ -70,8 +82,16 @@ def build_chat_system_prompt(
                 "search_text(path='src', query='MySymbol')"
             ),
             (
+                "- To search one file directly: "
+                "search_text(path='src/app.py', query='MySymbol')"
+            ),
+            (
                 "- To inspect a possibly large file first: "
                 "get_file_info(path='src/app.py')"
+            ),
+            (
+                "- To compare several candidate files first: "
+                "get_file_info(paths=['src/app.py', 'src/config.py'])"
             ),
             (
                 "- To read only part of a file: "
@@ -123,10 +143,25 @@ def build_chat_system_prompt(
         "Tool usage examples:\n"
         f"{usage_examples}\n\n"
         "Operational rules:\n"
+        "- path must never be blank. Use path='.' to operate on the entire "
+        "configured root.\n"
+        "- list_directory, list_directory_recursive, and find_files expect "
+        "directory paths.\n"
+        "- search_text accepts either a directory path or a single file path.\n"
+        "- get_file_info accepts either one file path or a list of file paths.\n"
+        "- read_file expects one file path.\n"
+        "- Use find_files for matching file paths or file names.\n"
+        "- Use search_text for searching inside file contents.\n"
         "- Prefer find_files or search_text before broad file reads.\n"
+        "- For questions about code behavior or provider support, usually start "
+        "with search_text(path='.', query='...') or a targeted "
+        "list_directory_recursive(path='src').\n"
         "- Use get_file_info before read_file when a file may be large.\n"
         "- Use start_char and end_char for partial reads when a full file is "
         "unnecessary.\n"
+        "- If a tool call fails because of its arguments or target path, do not "
+        "repeat the same failing call. Correct the arguments or choose a better "
+        "tool.\n"
         "- Answer conservatively and cite the evidence you actually have.\n\n"
         "Relevant limits:\n"
         f"{visible_limits}\n\n"

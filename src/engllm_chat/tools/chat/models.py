@@ -20,7 +20,13 @@ ChatWorkflowTurnStatus = Literal["completed", "needs_continuation", "interrupted
 class _PathArgument(DomainModel):
     """Common validation for tool arguments that include a relative path."""
 
-    path: str = "."
+    path: str = Field(
+        default=".",
+        description=(
+            "Root-relative directory path. Use '.' to search or list from the "
+            "configured root. Blank paths are invalid."
+        ),
+    )
 
     @field_validator("path")
     @classmethod
@@ -38,13 +44,22 @@ class ListDirectoryArgs(_PathArgument):
 class ListDirectoryRecursiveArgs(_PathArgument):
     """Arguments for `list_directory_recursive`."""
 
-    max_depth: int | None = Field(default=None, gt=0)
+    max_depth: int | None = Field(
+        default=None,
+        gt=0,
+        description="Optional positive recursion depth limit.",
+    )
 
 
 class FindFilesArgs(_PathArgument):
     """Arguments for `find_files`."""
 
-    pattern: str
+    pattern: str = Field(
+        description=(
+            "Glob pattern for file names and paths, such as '**/*.py'. "
+            "Use this to match file paths, not file contents."
+        )
+    )
 
     @field_validator("pattern")
     @classmethod
@@ -58,7 +73,12 @@ class FindFilesArgs(_PathArgument):
 class SearchTextArgs(_PathArgument):
     """Arguments for `search_text`."""
 
-    query: str
+    query: str = Field(
+        description=(
+            "Literal text to search within readable file contents under the "
+            "given directory path or within one specific file path."
+        )
+    )
 
     @field_validator("query")
     @classmethod
@@ -72,7 +92,68 @@ class SearchTextArgs(_PathArgument):
 class GetFileInfoArgs(DomainModel):
     """Arguments for `get_file_info`."""
 
-    path: str
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Root-relative file path for one file. Provide either path or paths, "
+            "but not both."
+        ),
+    )
+    paths: list[str] | None = Field(
+        default=None,
+        description=(
+            "Root-relative file paths for batched inspection. Use this when you "
+            "want metadata for multiple files in one tool call."
+        ),
+    )
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("path must not be empty")
+        return cleaned
+
+    @field_validator("paths")
+    @classmethod
+    def validate_paths(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("paths must not be empty")
+
+        cleaned_paths = [item.strip() for item in value]
+        if any(not item for item in cleaned_paths):
+            raise ValueError("paths must not contain empty values")
+        return cleaned_paths
+
+    @model_validator(mode="after")
+    def validate_path_selection(self) -> GetFileInfoArgs:
+        if (self.path is None) == (self.paths is None):
+            raise ValueError("provide exactly one of path or paths")
+        return self
+
+
+class ReadFileArgs(DomainModel):
+    """Arguments for `read_file`."""
+
+    path: str = Field(
+        description="Root-relative file path. Use this for one file only."
+    )
+
+    start_char: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional zero-based inclusive start character offset.",
+    )
+    end_char: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional zero-based exclusive end character offset.",
+    )
 
     @field_validator("path")
     @classmethod
@@ -81,13 +162,6 @@ class GetFileInfoArgs(DomainModel):
         if not cleaned:
             raise ValueError("path must not be empty")
         return cleaned
-
-
-class ReadFileArgs(GetFileInfoArgs):
-    """Arguments for `read_file`."""
-
-    start_char: int | None = Field(default=None, ge=0)
-    end_char: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_range(self) -> ReadFileArgs:

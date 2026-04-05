@@ -91,6 +91,10 @@ def test_runtime_argument_and_turn_models_validate_expected_states() -> None:
     assert FindFilesArgs(path=".", pattern=" *.py ").pattern == "*.py"
     assert SearchTextArgs(path=".", query=" TODO ").query == "TODO"
     assert GetFileInfoArgs(path=" README.md ").path == "README.md"
+    assert GetFileInfoArgs(paths=[" README.md ", "docs/CHAT_USAGE.md "]).paths == [
+        "README.md",
+        "docs/CHAT_USAGE.md",
+    ]
     assert ReadFileArgs(path="README.md", start_char=1, end_char=4).end_char == 4
 
     with pytest.raises(ValueError, match="path must not be empty"):
@@ -99,6 +103,12 @@ def test_runtime_argument_and_turn_models_validate_expected_states() -> None:
         FindFilesArgs(path=".", pattern="   ")
     with pytest.raises(ValueError, match="query must not be empty"):
         SearchTextArgs(path=".", query="   ")
+    with pytest.raises(ValueError, match="provide exactly one of path or paths"):
+        GetFileInfoArgs()
+    with pytest.raises(ValueError, match="provide exactly one of path or paths"):
+        GetFileInfoArgs(path="README.md", paths=["docs/CHAT_USAGE.md"])
+    with pytest.raises(ValueError, match="paths must not contain empty values"):
+        GetFileInfoArgs(paths=["README.md", "   "])
     with pytest.raises(ValueError, match="end_char must be greater than start_char"):
         ReadFileArgs(path="README.md", start_char=5, end_char=5)
 
