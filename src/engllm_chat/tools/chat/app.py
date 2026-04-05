@@ -7,6 +7,7 @@ from pathlib import Path
 
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Static
@@ -35,6 +36,7 @@ from engllm_chat.tools.chat.screens import (
     ComposerTextArea,
     CredentialModal,
     InterruptConfirmModal,
+    TranscriptCopyModal,
 )
 from engllm_chat.tools.chat.workflow import (
     ChatSessionTurnRunner,
@@ -48,6 +50,7 @@ __all__ = [
     "ComposerTextArea",
     "CredentialModal",
     "InterruptConfirmModal",
+    "TranscriptCopyModal",
     "TranscriptEntry",
     "_format_citation",
     "_format_final_response",
@@ -70,6 +73,16 @@ def _format_final_response_markdown(response: ChatFinalResponse) -> str:
 
 class ChatScreen(Screen[None]):
     """Main chat screen with transcript, composer, status, and footer rows."""
+
+    BINDINGS = [
+        Binding(
+            "f6",
+            "open_transcript_copy",
+            "Copy transcript",
+            show=False,
+            priority=True,
+        ),
+    ]
 
     DEFAULT_CSS = """
     ChatScreen {
@@ -306,6 +319,9 @@ class ChatScreen(Screen[None]):
 
     def _handle_inline_command(self, user_message: str) -> bool:
         return self._controller.handle_inline_command(user_message)
+
+    def action_open_transcript_copy(self) -> None:
+        self._controller.open_transcript_copy()
 
     def _cancel_active_turn(self, *, status_text: str) -> None:
         self._controller.cancel_active_turn(status_text=status_text)

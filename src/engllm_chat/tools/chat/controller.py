@@ -25,6 +25,7 @@ from engllm_chat.tools.chat.screens import (
     ComposerTextArea,
     CredentialModal,
     InterruptConfirmModal,
+    TranscriptCopyModal,
 )
 
 if TYPE_CHECKING:
@@ -216,9 +217,9 @@ class ChatScreenController:
         if self._screen._footer_confidence is not None:
             footer += f" | confidence: {self._screen._footer_confidence:.2f}"
         if self._screen._busy:
-            footer += " | Enter send | Shift+Enter newline | Stop active turn"
+            footer += " | Enter send | Shift+Enter newline | Stop active turn | F6 copy transcript"
         else:
-            footer += " | Enter send | Shift+Enter newline | /help | quit"
+            footer += " | Enter send | Shift+Enter newline | F6 copy transcript | /help | quit"
         self._screen.query_one("#footer-bar", Static).update(footer)
         self._screen.query_one("#stop-button", Button).disabled = not self._screen._busy
 
@@ -349,13 +350,29 @@ class ChatScreenController:
             self.append_transcript(
                 "system",
                 "Ask grounded questions about the selected root. "
+                "Use /copy to open a selectable transcript view. "
                 "Use quit or exit to leave.",
             )
+            return True
+        if normalized == "/copy":
+            self.open_transcript_copy()
             return True
         if normalized in {"quit", "exit"}:
             self._screen.app.exit()
             return True
         return False
+
+    def transcript_copy_text(self) -> str:
+        transcript = self._screen.query_one("#transcript", VerticalScroll)
+        parts: list[str] = []
+        for child in transcript.children:
+            text = getattr(child, "transcript_text", "").rstrip()
+            if text:
+                parts.append(text)
+        return "\n\n".join(parts).rstrip()
+
+    def open_transcript_copy(self) -> None:
+        self._screen.app.push_screen(TranscriptCopyModal(self.transcript_copy_text()))
 
     def cancel_active_turn(self, *, status_text: str) -> None:
         if self._screen._active_runner is None:

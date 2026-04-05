@@ -150,6 +150,15 @@ class TranscriptEntry(Static):
             )
         )
 
+    @property
+    def transcript_text(self) -> str:
+        """Return this transcript row as plain text for export/copy flows."""
+
+        renderable = getattr(self, "renderable", None)
+        if renderable is None:
+            return ""
+        return str(renderable).rstrip()
+
     @staticmethod
     def _format_text(
         role: str,

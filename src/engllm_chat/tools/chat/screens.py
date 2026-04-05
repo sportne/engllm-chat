@@ -68,6 +68,58 @@ class InterruptConfirmModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class TranscriptCopyModal(ModalScreen[None]):
+    """Modal that exposes the transcript in a selectable read-only text area."""
+
+    def __init__(self, transcript_text: str) -> None:
+        super().__init__(id="transcript-copy-modal")
+        self._transcript_text = transcript_text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="transcript-copy-body"):
+            yield Static(
+                "Select transcript text with the mouse, then use the copy buttons.",
+                id="transcript-copy-help",
+            )
+            yield TextArea(
+                self._transcript_text,
+                id="transcript-copy-area",
+                read_only=True,
+            )
+            yield Static("", id="transcript-copy-status")
+            with Horizontal(id="transcript-copy-actions"):
+                yield Button("Copy Selected", id="transcript-copy-selection")
+                yield Button("Copy All", id="transcript-copy-all", variant="primary")
+                yield Button("Close", id="transcript-copy-close")
+
+    def on_mount(self) -> None:
+        self.query_one("#transcript-copy-area", TextArea).focus()
+
+    def _set_status(self, text: str) -> None:
+        self.query_one("#transcript-copy-status", Static).update(text)
+
+    @on(Button.Pressed, "#transcript-copy-selection")
+    def handle_copy_selection(self) -> None:
+        text_area = self.query_one("#transcript-copy-area", TextArea)
+        selected_text = text_area.selected_text or text_area.text
+        self.app.copy_to_clipboard(selected_text)
+        if text_area.selected_text:
+            self._set_status("Copied selection.")
+        else:
+            self._set_status("No selection; copied full transcript.")
+
+    @on(Button.Pressed, "#transcript-copy-all")
+    def handle_copy_all(self) -> None:
+        text_area = self.query_one("#transcript-copy-area", TextArea)
+        text_area.select_all()
+        self.app.copy_to_clipboard(text_area.text)
+        self._set_status("Copied full transcript.")
+
+    @on(Button.Pressed, "#transcript-copy-close")
+    def handle_close(self) -> None:
+        self.dismiss(None)
+
+
 class ComposerTextArea(TextArea):
     """Chat composer with explicit Enter/Shift+Enter behavior."""
 

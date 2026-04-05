@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("textual")
 
 from textual.containers import VerticalScroll
+from textual.document._document import Selection
 from textual.widgets import Button, Input, Static, TextArea
 
 from engllm_chat.domain.errors import LLMError
@@ -30,6 +31,7 @@ from engllm_chat.tools.chat.app import (
     ComposerTextArea,
     CredentialModal,
     InterruptConfirmModal,
+    TranscriptCopyModal,
     TranscriptEntry,
     _format_citation,
     _format_final_response,
@@ -279,6 +281,7 @@ def test_chat_app_launches_with_shell_layout_and_startup_message(
             footer = _static_text(screen, "#footer-bar")
             assert "Enter send" in footer
             assert "Shift+Enter newline" in footer
+            assert "F6 copy transcript" in footer
             transcript_texts = _transcript_texts(app)
             assert any(str(tmp_path) in text for text in transcript_texts)
             assert any("/help" in text for text in transcript_texts)
@@ -657,6 +660,11 @@ def test_chat_app_inline_commands_blank_submit_and_no_stream_cancel_are_handled(
             exit_calls: list[bool] = []
             monkeypatch.setattr(app, "exit", lambda: exit_calls.append(True))
             screen._submit_draft("/help")
+            await pilot.pause()
+            screen._submit_draft("/copy")
+            await pilot.pause()
+            assert isinstance(app.screen, TranscriptCopyModal)
+            await pilot.click("#transcript-copy-close")
             await pilot.pause()
             screen._submit_draft("quit")
             await pilot.pause()
@@ -1199,6 +1207,88 @@ def test_chat_app_status_bar_animates_active_status_text(tmp_path: Path) -> None
             screen._set_status("")
             await pilot.pause(0.06)
             assert _static_text(screen, "#status-bar") == ""
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_transcript_copy_modal_supports_selection_and_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    copied_texts: list[str] = []
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        monkeypatch.setattr(app, "copy_to_clipboard", copied_texts.append)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._append_transcript("user", "Where did that come from?")
+            screen._handle_turn_result(
+                _result_event(
+                    ChatWorkflowTurnResult(
+                        status="completed",
+                        new_messages=[
+                            ChatMessage(
+                                role="user", content="Where did that come from?"
+                            ),
+                            ChatMessage(role="assistant", content='{"answer":"Done"}'),
+                        ],
+                        final_response=ChatFinalResponse(
+                            answer="Found it in `README.md`.",
+                            citations=[
+                                ChatCitation(
+                                    source_path=Path("README.md"),
+                                    line_start=1,
+                                    line_end=4,
+                                )
+                            ],
+                            confidence=0.8,
+                        ),
+                        session_state=ChatSessionState(),
+                    )
+                )
+            )
+            await pilot.pause(0.06)
+
+            await pilot.press("f6")
+            await pilot.pause()
+            assert isinstance(app.screen, TranscriptCopyModal)
+
+            text_area = app.screen.query_one("#transcript-copy-area", TextArea)
+            assert text_area.read_only is True
+            assert "You:\nWhere did that come from?" in text_area.text
+            assert "Assistant:\nFound it in `README.md`." in text_area.text
+            assert "Citations:\n- README.md:1-4" in text_area.text
+
+            text_area.selection = Selection((0, 0), (0, 3))
+            await pilot.click("#transcript-copy-selection")
+            await pilot.pause()
+            assert copied_texts[-1]
+            assert (
+                _static_text(app.screen, "#transcript-copy-status")
+                == "Copied selection."
+            )
+
+            await pilot.click("#transcript-copy-all")
+            await pilot.pause()
+            assert copied_texts[-1] == text_area.text
+            assert (
+                _static_text(app.screen, "#transcript-copy-status")
+                == "Copied full transcript."
+            )
+
+            await pilot.click("#transcript-copy-close")
+            await pilot.pause()
+            assert isinstance(app.screen, ChatScreen)
             app.exit()
             await pilot.pause()
 
