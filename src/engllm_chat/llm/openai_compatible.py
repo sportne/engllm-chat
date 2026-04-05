@@ -4,34 +4,31 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.parse
-from typing import Any, cast
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
-from engllm_chat.domain.errors import LLMError
+from engllm_chat.domain.errors import LLMError, ValidationError
 from engllm_chat.domain.models import ChatMessage, ChatTokenUsage, ChatToolCall
 from engllm_chat.llm.base import (
     ChatToolDefinition,
     ChatTurnRequest,
     ChatTurnResponse,
-    validate_json_text,
     validate_payload,
 )
 
 _openai_sdk: Any = None
-_pydantic_function_tool_sdk: Any = None
 try:
     from openai import OpenAI as _OpenAIClient
-    from openai import pydantic_function_tool as _pydantic_function_tool
 
     _openai_sdk = _OpenAIClient
-    _pydantic_function_tool_sdk = _pydantic_function_tool
 except Exception:  # pragma: no cover - optional dependency
     pass
 
 OpenAI: Any = _openai_sdk
-pydantic_function_tool: Any = _pydantic_function_tool_sdk
+_MAX_SCHEMA_ATTEMPTS = 3
 
 
 def normalize_ollama_base_url(base_url: str | None) -> str:
@@ -61,55 +58,64 @@ def _serialize_chat_message(message: ChatMessage) -> dict[str, object]:
         if message.tool_result is None:
             raise LLMError("Tool chat message missing tool_result")
         return {
-            "role": "tool",
-            "tool_call_id": message.tool_result.call_id,
-            "content": json.dumps(message.tool_result.model_dump(mode="json")),
+            "role": "user",
+            "content": (
+                "Tool result:\n"
+                f"{json.dumps(message.tool_result.model_dump(mode='json'), sort_keys=True)}"
+            ),
         }
 
     payload: dict[str, object] = {"role": message.role}
+    if message.role == "assistant" and message.tool_calls:
+        request_text = json.dumps(
+            [tool_call.model_dump(mode="json") for tool_call in message.tool_calls],
+            sort_keys=True,
+        )
+        content_parts = []
+        if message.content is not None:
+            content_parts.append(message.content)
+        content_parts.append(f"Tool request:\n{request_text}")
+        payload["content"] = "\n\n".join(part for part in content_parts if part.strip())
+        return payload
+
     if message.content is not None:
         payload["content"] = message.content
-    elif message.role in {"system", "user"}:
+    elif message.role in {"system", "user", "assistant"}:
         payload["content"] = ""
-
-    if message.role == "assistant" and message.tool_calls:
-        payload["tool_calls"] = [
-            {
-                "id": tool_call.call_id,
-                "type": "function",
-                "function": {
-                    "name": tool_call.tool_name,
-                    "arguments": json.dumps(tool_call.arguments, sort_keys=True),
-                },
-            }
-            for tool_call in message.tool_calls
-        ]
     return payload
 
 
-def _serialize_tool_definition(tool: ChatToolDefinition) -> dict[str, object]:
-    if tool.argument_model is not None:
-        if pydantic_function_tool is None:
-            raise LLMError(
-                "OpenAI SDK dependencies are unavailable. "
-                "Install project dependencies to use hosted providers."
-            )
-        return cast(
-            dict[str, object],
-            pydantic_function_tool(
-                tool.argument_model,
-                name=tool.name,
-                description=tool.description,
-            ),
+def _build_chat_turn_action_model(
+    response_model: type[BaseModel],
+    tools: list[ChatToolDefinition],
+) -> type[BaseModel]:
+    final_action_model = create_model(
+        f"{response_model.__name__}FinalAction",
+        kind=(Literal["final_response"], "final_response"),
+        response=(response_model, ...),
+    )
+
+    action_field_type: Any = final_action_model
+    if tools:
+        tool_name_pattern = (
+            "^(" + "|".join(re.escape(tool.name) for tool in tools) + ")$"
         )
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
-        },
-    }
+
+        tool_action_model = create_model(
+            f"{response_model.__name__}ToolAction",
+            kind=(Literal["tool_request"], "tool_request"),
+            tool_name=(str, Field(pattern=tool_name_pattern)),
+            arguments=(dict[str, object], Field(default_factory=dict)),
+        )
+        action_field_type = Annotated[
+            tool_action_model | final_action_model,
+            Field(discriminator="kind"),
+        ]
+
+    return create_model(
+        f"{response_model.__name__}ChatTurnActionEnvelope",
+        action=(action_field_type, ...),
+    )
 
 
 def _extract_message_text(message: Any) -> str:
@@ -135,6 +141,27 @@ def _extract_message_text(message: Any) -> str:
     return "".join(text_parts)
 
 
+def _extract_action(
+    action_response_model: type[BaseModel],
+    message: Any,
+) -> BaseModel:
+    parsed = getattr(message, "parsed", None)
+    if isinstance(parsed, BaseModel):
+        return parsed
+    if isinstance(parsed, dict):
+        return validate_payload(action_response_model, parsed)
+
+    content_text = _extract_message_text(message).strip()
+    if not content_text:
+        raise LLMError("OpenAI-compatible response missing assistant content")
+    try:
+        return action_response_model.model_validate_json(content_text)
+    except Exception as exc:
+        raise LLMError(
+            "OpenAI-compatible provider returned malformed action JSON"
+        ) from exc
+
+
 def _extract_token_usage(response: Any) -> ChatTokenUsage | None:
     usage = getattr(response, "usage", None)
     if usage is None:
@@ -156,77 +183,74 @@ def _extract_token_usage(response: Any) -> ChatTokenUsage | None:
     )
 
 
-def _normalize_parsed_tool_arguments(parsed_arguments: Any) -> dict[str, object] | None:
-    if parsed_arguments is None:
-        return None
-    if isinstance(parsed_arguments, BaseModel):
-        return parsed_arguments.model_dump(mode="json")
-    if isinstance(parsed_arguments, dict):
-        return parsed_arguments
-    return None
-
-
-def _parse_tool_arguments(raw_arguments: Any) -> dict[str, object]:
-    if isinstance(raw_arguments, dict):
-        return raw_arguments
-    if isinstance(raw_arguments, str):
-        try:
-            parsed = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            raise LLMError(
-                "OpenAI-compatible provider returned malformed tool-call arguments"
-            ) from exc
-        if not isinstance(parsed, dict):
-            raise LLMError(
-                "OpenAI-compatible provider returned non-object tool-call arguments"
-            )
-        return parsed
-    raise LLMError("OpenAI-compatible provider returned malformed tool-call arguments")
-
-
-def _extract_tool_calls(message: Any) -> list[ChatToolCall]:
-    raw_tool_calls = getattr(message, "tool_calls", None)
-    if not isinstance(raw_tool_calls, list):
-        return []
-
-    tool_calls: list[ChatToolCall] = []
-    for index, entry in enumerate(raw_tool_calls):
-        function = getattr(entry, "function", None)
-        tool_name = getattr(function, "name", None)
-        if not isinstance(tool_name, str) or not tool_name.strip():
-            raise LLMError("OpenAI-compatible tool call missing function name")
-        parsed_arguments = _normalize_parsed_tool_arguments(
-            getattr(function, "parsed_arguments", None)
-        )
-        raw_arguments = getattr(function, "arguments", None)
-        tool_calls.append(
-            ChatToolCall(
-                call_id=getattr(entry, "id", None) or f"tool-call-{index}",
-                tool_name=tool_name,
-                arguments=parsed_arguments or _parse_tool_arguments(raw_arguments),
-            )
-        )
-    return tool_calls
-
-
-def _extract_final_response(
+def _extract_chat_turn_result(
+    *,
     response_model: type[BaseModel],
+    action_response_model: type[BaseModel],
     message: Any,
-) -> tuple[BaseModel, str]:
-    content_text = _extract_message_text(message).strip()
-    parsed = getattr(message, "parsed", None)
+) -> tuple[str, ChatToolCall | None, BaseModel | None, str]:
+    action_envelope = _extract_action(action_response_model, message)
+    action = getattr(action_envelope, "action", None)
+    if action is None:
+        if isinstance(action_envelope, response_model):
+            raw_text = (
+                _extract_message_text(message).strip()
+                or action_envelope.model_dump_json()
+            )
+            return "final_response", None, action_envelope, raw_text
+        raise LLMError("OpenAI-compatible response missing action payload")
 
-    if isinstance(parsed, BaseModel):
-        return parsed, content_text or parsed.model_dump_json()
-    if isinstance(parsed, dict):
-        parsed_model = validate_payload(response_model, parsed)
-        return parsed_model, content_text or parsed_model.model_dump_json()
-    if parsed is not None:
-        parsed_model = response_model.model_validate(parsed)
-        return parsed_model, content_text or parsed_model.model_dump_json()
-    if content_text:
-        return validate_json_text(response_model, content_text), content_text
-    raise LLMError("OpenAI-compatible response missing assistant content")
+    content_text = _extract_message_text(message).strip()
+    action_kind = getattr(action, "kind", None)
+    if action_kind == "tool_request":
+        tool_name = getattr(action, "tool_name", None)
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            raise LLMError("OpenAI-compatible tool action missing tool_name")
+        arguments = getattr(action, "arguments", None)
+        if not isinstance(arguments, dict):
+            raise LLMError("OpenAI-compatible tool action missing arguments object")
+        tool_call = ChatToolCall(
+            call_id="tool-call-0",
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        raw_text = content_text or json.dumps(
+            {
+                "action": {
+                    "kind": "tool_request",
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                }
+            },
+            sort_keys=True,
+        )
+        return "tool_calls", tool_call, None, raw_text
+
+    if action_kind != "final_response":
+        raise LLMError("OpenAI-compatible response returned unknown action kind")
+
+    final_response = getattr(action, "response", None)
+    if isinstance(final_response, BaseModel):
+        parsed_model = final_response
+    elif isinstance(final_response, dict):
+        parsed_model = validate_payload(response_model, final_response)
+    else:
+        parsed_model = response_model.model_validate(final_response)
+    raw_text = content_text or parsed_model.model_dump_json()
+    return "final_response", None, parsed_model, raw_text
+
+
+def _build_schema_retry_feedback(error_message: str) -> ChatMessage:
+    """Return one corrective user message after a schema validation failure."""
+
+    return ChatMessage(
+        role="user",
+        content=(
+            "The previous response did not satisfy the required structured schema.\n"
+            f"Validation error: {error_message}\n"
+            "Return exactly one valid action object that matches the requested schema."
+        ),
+    )
 
 
 class OpenAICompatibleChatLLMClient:
@@ -265,54 +289,84 @@ class OpenAICompatibleChatLLMClient:
     def generate_chat_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
         """Send one non-streaming chat turn to an OpenAI-compatible provider."""
 
-        payload: dict[str, object] = {
-            "model": request.model_name or self._model_name,
-            "messages": [
-                _serialize_chat_message(message) for message in request.messages
-            ],
-            "temperature": request.temperature,
-            "response_format": request.response_model,
-        }
-        if request.tools:
-            payload["tools"] = [
-                _serialize_tool_definition(tool) for tool in request.tools
-            ]
-        try:
-            response = self._client.beta.chat.completions.parse(**payload)
-        except Exception as exc:  # pragma: no cover - provider/network dependent
-            raise LLMError(f"{self._provider_name} request failed: {exc}") from exc
+        action_response_model = _build_chat_turn_action_model(
+            request.response_model,
+            request.tools,
+        )
+        request_messages = list(request.messages)
+        last_schema_error: Exception | None = None
 
-        choices = getattr(response, "choices", None)
-        if not isinstance(choices, list) or not choices:
-            raise LLMError(f"{self._provider_name} returned no choices")
+        for attempt_index in range(_MAX_SCHEMA_ATTEMPTS):
+            payload: dict[str, object] = {
+                "model": request.model_name or self._model_name,
+                "messages": [
+                    _serialize_chat_message(message) for message in request_messages
+                ],
+                "temperature": request.temperature,
+                "response_format": action_response_model,
+            }
+            try:
+                response = self._client.beta.chat.completions.parse(**payload)
+            except Exception as exc:  # pragma: no cover - provider/network dependent
+                raise LLMError(f"{self._provider_name} request failed: {exc}") from exc
 
-        choice = choices[0]
-        message = getattr(choice, "message", None)
-        if message is None:
-            raise LLMError(f"{self._provider_name} response missing message")
+            choices = getattr(response, "choices", None)
+            if not isinstance(choices, list) or not choices:
+                raise LLMError(f"{self._provider_name} returned no choices")
 
-        tool_calls = _extract_tool_calls(message)
-        token_usage = _extract_token_usage(response)
+            choice = choices[0]
+            message = getattr(choice, "message", None)
+            if message is None:
+                raise LLMError(f"{self._provider_name} response missing message")
 
-        if tool_calls:
-            content_text = _extract_message_text(message).strip()
+            token_usage = _extract_token_usage(response)
+            try:
+                finish_reason, tool_call, final_response, raw_text = (
+                    _extract_chat_turn_result(
+                        response_model=request.response_model,
+                        action_response_model=action_response_model,
+                        message=message,
+                    )
+                )
+            except (ValidationError, ValueError, TypeError, LLMError) as exc:
+                last_schema_error = exc
+                if attempt_index + 1 >= _MAX_SCHEMA_ATTEMPTS:
+                    raise LLMError(
+                        "OpenAI-compatible provider failed to return a valid "
+                        f"structured response after {_MAX_SCHEMA_ATTEMPTS} attempts: {exc}"
+                    ) from exc
+                request_messages.append(_build_schema_retry_feedback(str(exc)))
+                continue
+
+            if finish_reason == "tool_calls":
+                if tool_call is None:
+                    raise LLMError(
+                        "OpenAI-compatible tool action completed without tool call"
+                    )
+                return ChatTurnResponse(
+                    assistant_message=ChatMessage(
+                        role="assistant",
+                        content=raw_text or None,
+                        tool_calls=[tool_call],
+                    ),
+                    tool_calls=[tool_call],
+                    token_usage=token_usage,
+                    raw_text=raw_text,
+                    finish_reason="tool_calls",
+                )
+
+            if final_response is None:
+                raise LLMError(
+                    "OpenAI-compatible final response completed without response payload"
+                )
             return ChatTurnResponse(
-                assistant_message=ChatMessage(
-                    role="assistant",
-                    content=content_text or None,
-                    tool_calls=tool_calls,
-                ),
-                tool_calls=tool_calls,
+                assistant_message=ChatMessage(role="assistant", content=raw_text),
+                final_response=final_response,
                 token_usage=token_usage,
-                raw_text=content_text,
-                finish_reason="tool_calls",
+                raw_text=raw_text,
+                finish_reason="final_response",
             )
 
-        parsed, content_text = _extract_final_response(request.response_model, message)
-        return ChatTurnResponse(
-            assistant_message=ChatMessage(role="assistant", content=content_text),
-            final_response=parsed,
-            token_usage=token_usage,
-            raw_text=content_text,
-            finish_reason="final_response",
-        )
+        raise LLMError(
+            "OpenAI-compatible provider failed to return a valid structured response"
+        ) from last_schema_error

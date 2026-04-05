@@ -249,6 +249,10 @@ def test_ollama_helper_functions_cover_normalization_and_serialization(
     expected: str,
 ) -> None:
     assert openai_compatible_module.normalize_ollama_base_url(raw) == expected
+    assert (
+        openai_compatible_module.normalize_ollama_base_url("http://localhost:11434/v1")
+        == "http://localhost:11434/v1"
+    )
 
 
 def test_ollama_client_uses_openai_compatible_transport(
@@ -309,7 +313,8 @@ def test_ollama_client_uses_openai_compatible_transport(
         "timeout": 60.0,
     }
     assert (
-        _FakeOpenAIClient.captured_payloads[-1]["response_format"] is ChatFinalResponse
+        "action"
+        in _FakeOpenAIClient.captured_payloads[-1]["response_format"].model_fields
     )
 
 
@@ -344,7 +349,9 @@ def test_openai_compatible_helpers_cover_serialization_and_parsing_fallbacks() -
     serialized_tool = openai_compatible_module._serialize_chat_message(
         ChatMessage(role="tool", tool_result=tool_result)
     )
-    assert serialized_tool["tool_call_id"] == "call-1"
+    assert serialized_tool["role"] == "user"
+    assert "Tool result" in str(serialized_tool["content"])
+    assert "call-1" in str(serialized_tool["content"])
 
     assistant_with_tool = openai_compatible_module._serialize_chat_message(
         ChatMessage(
@@ -359,7 +366,31 @@ def test_openai_compatible_helpers_cover_serialization_and_parsing_fallbacks() -
             ],
         )
     )
-    assert assistant_with_tool["tool_calls"][0]["function"]["name"] == "read_file"
+    assert assistant_with_tool["role"] == "assistant"
+    assert "Tool request" in str(assistant_with_tool["content"])
+    assert "read_file" in str(assistant_with_tool["content"])
+
+    assistant_with_tool_and_no_content = (
+        openai_compatible_module._serialize_chat_message(
+            ChatMessage(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatToolCall(
+                        call_id="call-3",
+                        tool_name="list_directory",
+                        arguments={"path": "."},
+                    )
+                ],
+            )
+        )
+    )
+    assert "Tool request" in str(assistant_with_tool_and_no_content["content"])
+
+    system_without_content = openai_compatible_module._serialize_chat_message(
+        ChatMessage.model_construct(role="system", content=None)
+    )
+    assert system_without_content["content"] == ""
 
     with pytest.raises(Exception, match="missing tool_result"):
         openai_compatible_module._serialize_chat_message(
@@ -375,6 +406,10 @@ def test_openai_compatible_helpers_cover_serialization_and_parsing_fallbacks() -
             SimpleNamespace(content=[{"text": "a"}, SimpleNamespace(text="b")])
         )
         == "ab"
+    )
+    assert (
+        openai_compatible_module._extract_message_text(SimpleNamespace(content=123))
+        == ""
     )
 
     assert (
@@ -393,50 +428,111 @@ def test_openai_compatible_helpers_cover_serialization_and_parsing_fallbacks() -
     assert usage.output_tokens == 2
     assert usage.total_tokens == 2
 
-    assert openai_compatible_module._normalize_parsed_tool_arguments(
-        FindFilesArgs(path=".", pattern="*.py")
-    ) == {"path": ".", "pattern": "*.py"}
-    assert openai_compatible_module._normalize_parsed_tool_arguments(
-        {"path": "README.md"}
-    ) == {"path": "README.md"}
-    assert openai_compatible_module._normalize_parsed_tool_arguments(["bad"]) is None
-
-    assert openai_compatible_module._parse_tool_arguments({"path": "README.md"}) == {
-        "path": "README.md"
-    }
-    with pytest.raises(Exception, match="malformed tool-call arguments"):
-        openai_compatible_module._parse_tool_arguments("not-json")
-    with pytest.raises(Exception, match="non-object tool-call arguments"):
-        openai_compatible_module._parse_tool_arguments('["bad"]')
-
-    with pytest.raises(Exception, match="missing function name"):
-        openai_compatible_module._extract_tool_calls(
-            SimpleNamespace(
-                tool_calls=[
-                    SimpleNamespace(function=SimpleNamespace(name="", arguments="{}"))
-                ]
-            )
-        )
-
-    parsed_model, parsed_raw_text = openai_compatible_module._extract_final_response(
+    action_model = openai_compatible_module._build_chat_turn_action_model(
         ChatFinalResponse,
+        [],
+    )
+    parsed_action = openai_compatible_module._extract_action(
+        action_model,
         SimpleNamespace(
-            content="plain answer", parsed=ChatFinalResponse(answer="Done")
+            content="plain answer",
+            parsed={
+                "action": {
+                    "kind": "final_response",
+                    "response": {"answer": "Done"},
+                }
+            },
         ),
     )
-    assert parsed_model == ChatFinalResponse(answer="Done")
-    assert parsed_raw_text == "plain answer"
+    assert parsed_action.action.response == ChatFinalResponse(answer="Done")
 
-    dict_model, dict_raw_text = openai_compatible_module._extract_final_response(
-        ChatFinalResponse,
-        SimpleNamespace(content="", parsed={"answer": "From dict"}),
+    json_action = openai_compatible_module._extract_action(
+        action_model,
+        SimpleNamespace(
+            content='{"action":{"kind":"final_response","response":{"answer":"From JSON"}}}',
+            parsed=None,
+        ),
     )
-    assert dict_model == ChatFinalResponse(answer="From dict")
-    assert dict_raw_text == dict_model.model_dump_json()
+    assert json_action.action.response == ChatFinalResponse(answer="From JSON")
 
-    json_model, json_raw_text = openai_compatible_module._extract_final_response(
-        ChatFinalResponse,
-        SimpleNamespace(content='{"answer":"From JSON"}', parsed=None),
+    with pytest.raises(Exception, match="malformed action JSON"):
+        openai_compatible_module._extract_action(
+            action_model,
+            SimpleNamespace(content="not-json", parsed=None),
+        )
+    with pytest.raises(Exception, match="missing assistant content"):
+        openai_compatible_module._extract_action(
+            action_model,
+            SimpleNamespace(content=None, parsed=None),
+        )
+
+    (
+        fallback_finish_reason,
+        fallback_tool_call,
+        fallback_final_response,
+        fallback_raw,
+    ) = openai_compatible_module._extract_chat_turn_result(
+        response_model=ChatFinalResponse,
+        action_response_model=action_model,
+        message=SimpleNamespace(
+            content="",
+            parsed=ChatFinalResponse(answer="Fallback final"),
+        ),
     )
-    assert json_model == ChatFinalResponse(answer="From JSON")
-    assert json_raw_text == '{"answer":"From JSON"}'
+    assert fallback_finish_reason == "final_response"
+    assert fallback_tool_call is None
+    assert fallback_final_response == ChatFinalResponse(answer="Fallback final")
+    assert "Fallback final" in fallback_raw
+
+    finish_reason, tool_call, final_response, raw_text = (
+        openai_compatible_module._extract_chat_turn_result(
+            response_model=ChatFinalResponse,
+            action_response_model=openai_compatible_module._build_chat_turn_action_model(
+                ChatFinalResponse,
+                [
+                    openai_compatible_module.ChatToolDefinition(
+                        name="find_files",
+                        description="Find files",
+                        input_schema={},
+                        argument_model=FindFilesArgs,
+                    )
+                ],
+            ),
+            message=SimpleNamespace(
+                content="",
+                parsed={
+                    "action": {
+                        "kind": "tool_request",
+                        "tool_name": "find_files",
+                        "arguments": {"path": ".", "pattern": "*.py"},
+                    }
+                },
+            ),
+        )
+    )
+    assert finish_reason == "tool_calls"
+    assert tool_call is not None
+    assert tool_call.tool_name == "find_files"
+    assert tool_call.arguments == {"path": ".", "pattern": "*.py"}
+    assert final_response is None
+    assert "tool_request" in raw_text
+
+    finish_reason, tool_call, final_response, raw_text = (
+        openai_compatible_module._extract_chat_turn_result(
+            response_model=ChatFinalResponse,
+            action_response_model=action_model,
+            message=SimpleNamespace(
+                content="",
+                parsed={
+                    "action": {
+                        "kind": "final_response",
+                        "response": {"answer": "From dict"},
+                    }
+                },
+            ),
+        )
+    )
+    assert finish_reason == "final_response"
+    assert tool_call is None
+    assert final_response == ChatFinalResponse(answer="From dict")
+    assert raw_text == final_response.model_dump_json()

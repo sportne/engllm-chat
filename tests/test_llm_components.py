@@ -37,46 +37,14 @@ class _ReadFileArgs(BaseModel):
     path: str
 
 
-class _FakeFunction:
-    def __init__(
-        self,
-        name: str,
-        arguments: str | dict[str, object],
-        *,
-        parsed_arguments: object | None = None,
-    ) -> None:
-        self.name = name
-        self.arguments = arguments
-        self.parsed_arguments = parsed_arguments
-
-
-class _FakeToolCall:
-    def __init__(
-        self,
-        call_id: str,
-        name: str,
-        arguments: str | dict[str, object],
-        *,
-        parsed_arguments: object | None = None,
-    ) -> None:
-        self.id = call_id
-        self.function = _FakeFunction(
-            name,
-            arguments,
-            parsed_arguments=parsed_arguments,
-        )
-
-
 class _FakeMessage:
     def __init__(
         self,
         *,
         content: str | None = None,
-        tool_calls: list[_FakeToolCall] | None = None,
         parsed: object | None = None,
     ) -> None:
         self.content = content
-        self.tool_calls = tool_calls or []
         self.parsed = parsed
 
 
@@ -314,6 +282,21 @@ def test_openai_compatible_client_requires_configured_api_key(
         )
 
 
+def test_openai_compatible_client_requires_sdk_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", None)
+
+    with pytest.raises(LLMError, match="SDK dependencies are unavailable"):
+        OpenAICompatibleChatLLMClient(
+            model_name="gpt-test",
+            provider_name="openai",
+            api_key_env_var=None,
+            api_key="secret",
+            base_url="https://api.openai.com/v1",
+        )
+
+
 def test_openai_compatible_generate_chat_turn_parses_final_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -323,7 +306,12 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
         _FakeChatCompletionResponse(
             message=_FakeMessage(
                 content="Hosted done",
-                parsed=ChatFinalResponse(answer="Hosted done"),
+                parsed={
+                    "action": {
+                        "kind": "final_response",
+                        "response": {"answer": "Hosted done"},
+                    }
+                },
             ),
             usage=_FakeUsage(prompt_tokens=3, completion_tokens=5, total_tokens=8),
         )
@@ -351,47 +339,28 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
     assert response.token_usage.total_tokens == 8
     assert response.raw_text == "Hosted done"
     assert _FakeOpenAIClient.captured_parse_payloads[-1]["model"] == "gpt-test"
-    assert (
-        _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"]
-        is ChatFinalResponse
-    )
+    response_format = _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"]
+    assert response_format is not ChatFinalResponse
+    assert "action" in response_format.model_fields
+    assert "tools" not in _FakeOpenAIClient.captured_parse_payloads[-1]
 
 
 def test_openai_compatible_generate_chat_turn_parses_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
-    tool_builder_calls: list[tuple[type[BaseModel], str, str]] = []
-
-    def _fake_pydantic_function_tool(
-        model: type[BaseModel],
-        *,
-        name: str,
-        description: str,
-    ) -> dict[str, object]:
-        tool_builder_calls.append((model, name, description))
-        return {
-            "type": "function",
-            "function": {"name": name, "description": description, "strict": True},
-        }
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.openai_compatible.pydantic_function_tool",
-        _fake_pydantic_function_tool,
-    )
     _FakeOpenAIClient.reset()
     _FakeOpenAIClient.queued_parse_responses = [
         _FakeChatCompletionResponse(
             message=_FakeMessage(
                 content="",
-                tool_calls=[
-                    _FakeToolCall(
-                        "call-1",
-                        "read_file",
-                        '{"path":"README.md"}',
-                        parsed_arguments=_ReadFileArgs(path="README.md"),
-                    )
-                ],
+                parsed={
+                    "action": {
+                        "kind": "tool_request",
+                        "tool_name": "read_file",
+                        "arguments": {"path": "README.md"},
+                    }
+                },
             )
         )
     ]
@@ -427,17 +396,8 @@ def test_openai_compatible_generate_chat_turn_parses_tool_calls(
     assert response.finish_reason == "tool_calls"
     assert response.tool_calls[0].tool_name == "read_file"
     assert response.tool_calls[0].arguments == {"path": "README.md"}
-    assert tool_builder_calls == [(_ReadFileArgs, "read_file", "Read one file")]
-    assert _FakeOpenAIClient.captured_parse_payloads[-1]["tools"] == [
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read one file",
-                "strict": True,
-            },
-        }
-    ]
+    assert "tools" not in _FakeOpenAIClient.captured_parse_payloads[-1]
+    assert "tool_request" in response.raw_text
 
 
 def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
@@ -447,7 +407,12 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
         _FakeChatCompletionResponse(
             message=_FakeMessage(
                 content="Done",
-                parsed=ChatFinalResponse(answer="Done"),
+                parsed={
+                    "action": {
+                        "kind": "final_response",
+                        "response": {"answer": "Done"},
+                    }
+                },
             ),
             usage=_FakeUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10),
         )
@@ -464,6 +429,16 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
             messages=[ChatMessage(role="user", content="hello")],
             response_model=ChatFinalResponse,
             model_name="qwen",
+            tools=[
+                ChatToolDefinition(
+                    name="list_directory",
+                    description="List one directory",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                )
+            ],
         )
     )
 
@@ -475,8 +450,8 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
     assert _FakeOpenAIClient.last_init_kwargs["base_url"] == "http://localhost:11434/v1"
     assert _FakeOpenAIClient.last_init_kwargs["api_key"] == "ollama"
     assert (
-        _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"]
-        is ChatFinalResponse
+        "action"
+        in _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"].model_fields
     )
 
 
@@ -487,14 +462,13 @@ def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
         _FakeChatCompletionResponse(
             message=_FakeMessage(
                 content="",
-                tool_calls=[
-                    _FakeToolCall(
-                        "call-1",
-                        "list_directory",
-                        '{"path":"."}',
-                        parsed_arguments={"path": "."},
-                    )
-                ],
+                parsed={
+                    "action": {
+                        "kind": "tool_request",
+                        "tool_name": "list_directory",
+                        "arguments": {"path": "."},
+                    }
+                },
             )
         )
     ]
@@ -510,11 +484,187 @@ def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
             messages=[ChatMessage(role="user", content="hello")],
             response_model=ChatFinalResponse,
             model_name="qwen",
+            tools=[
+                ChatToolDefinition(
+                    name="list_directory",
+                    description="List one directory",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                )
+            ],
         )
     )
 
     assert response.finish_reason == "tool_calls"
     assert response.tool_calls[0].tool_name == "list_directory"
+
+
+def test_openai_compatible_generate_chat_turn_retries_after_schema_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_parse_responses = [
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(content="not-json", parsed=None),
+        ),
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="Recovered",
+                parsed={
+                    "action": {
+                        "kind": "final_response",
+                        "response": {"answer": "Recovered"},
+                    }
+                },
+            ),
+            usage=_FakeUsage(prompt_tokens=6, completion_tokens=4, total_tokens=10),
+        ),
+    ]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+
+    response = client.generate_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_model=ChatFinalResponse,
+            model_name="gpt-test",
+        )
+    )
+
+    assert response.finish_reason == "final_response"
+    assert response.final_response == ChatFinalResponse(answer="Recovered")
+    assert len(_FakeOpenAIClient.captured_parse_payloads) == 2
+    second_messages = _FakeOpenAIClient.captured_parse_payloads[1]["messages"]
+    assert isinstance(second_messages, list)
+    assert "did not satisfy the required structured schema" in str(
+        second_messages[-1]["content"]
+    )
+    assert "malformed action JSON" in str(second_messages[-1]["content"])
+
+
+def test_openai_compatible_generate_chat_turn_raises_after_three_schema_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_parse_responses = [
+        _FakeChatCompletionResponse(message=_FakeMessage(content="bad-1", parsed=None)),
+        _FakeChatCompletionResponse(message=_FakeMessage(content="bad-2", parsed=None)),
+        _FakeChatCompletionResponse(message=_FakeMessage(content="bad-3", parsed=None)),
+    ]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+
+    with pytest.raises(
+        LLMError,
+        match="failed to return a valid structured response after 3 attempts",
+    ):
+        client.generate_chat_turn(
+            ChatTurnRequest(
+                messages=[ChatMessage(role="user", content="hello")],
+                response_model=ChatFinalResponse,
+                model_name="gpt-test",
+            )
+        )
+
+    assert len(_FakeOpenAIClient.captured_parse_payloads) == 3
+
+
+def test_openai_compatible_generate_chat_turn_surfaces_request_and_protocol_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+
+    class _RaisingClient(_FakeOpenAIClient):
+        def _parse(self, **payload: object) -> object:
+            del payload
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _RaisingClient)
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+    with pytest.raises(LLMError, match="request failed: boom"):
+        client.generate_chat_turn(
+            ChatTurnRequest(
+                messages=[ChatMessage(role="user", content="hello")],
+                response_model=ChatFinalResponse,
+                model_name="gpt-test",
+            )
+        )
+
+    class _NoChoicesClient(_FakeOpenAIClient):
+        def _parse(self, **payload: object) -> object:
+            del payload
+            return type(
+                "_NoChoiceResponse",
+                (),
+                {"choices": [], "usage": None},
+            )()
+
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _NoChoicesClient)
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+    with pytest.raises(LLMError, match="returned no choices"):
+        client.generate_chat_turn(
+            ChatTurnRequest(
+                messages=[ChatMessage(role="user", content="hello")],
+                response_model=ChatFinalResponse,
+                model_name="gpt-test",
+            )
+        )
+
+    class _MissingMessageClient(_FakeOpenAIClient):
+        def _parse(self, **payload: object) -> object:
+            del payload
+            return type(
+                "_MissingMessageResponse",
+                (),
+                {"choices": [type("_Choice", (), {"message": None})()], "usage": None},
+            )()
+
+    monkeypatch.setattr(
+        "engllm_chat.llm.openai_compatible.OpenAI", _MissingMessageClient
+    )
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+    with pytest.raises(LLMError, match="response missing message"):
+        client.generate_chat_turn(
+            ChatTurnRequest(
+                messages=[ChatMessage(role="user", content="hello")],
+                response_model=ChatFinalResponse,
+                model_name="gpt-test",
+            )
+        )
 
 
 def test_probe_main_requires_api_key(capsys: pytest.CaptureFixture[str]) -> None:

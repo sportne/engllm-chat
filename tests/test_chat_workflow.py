@@ -124,6 +124,9 @@ def test_build_chat_system_prompt_mentions_ground_rules_and_final_response() -> 
     assert "All tool paths are relative to the configured root." in prompt
     assert "Tool outputs are authoritative over guesses." in prompt
     assert "Answer conservatively and cite the evidence you actually have." in prompt
+    assert "return exactly one structured action" in prompt
+    assert "action.kind='tool_request'" in prompt
+    assert "Request at most one tool per turn." in prompt
 
     for field_name in (
         "answer",
