@@ -224,14 +224,6 @@ class ChatWorkflowStatusEvent(DomainModel):
     status: str
 
 
-class ChatWorkflowAssistantDeltaEvent(DomainModel):
-    """One incremental assistant text update for the active transcript row."""
-
-    event_type: Literal["assistant_delta"] = "assistant_delta"
-    delta_text: str
-    accumulated_text: str
-
-
 class ChatWorkflowResultEvent(DomainModel):
     """Terminal workflow event carrying the completed turn result."""
 

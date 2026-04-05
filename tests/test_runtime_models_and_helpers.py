@@ -19,10 +19,6 @@ from engllm_chat.domain.models import (
 )
 from engllm_chat.llm import openai_compatible as openai_compatible_module
 from engllm_chat.llm.base import (
-    ChatAssistantDeltaEvent,
-    ChatFinalResponseEvent,
-    ChatInterruptedEvent,
-    ChatToolCallsEvent,
     ChatTurnRequest,
     ChatTurnResponse,
     StructuredGenerationRequest,
@@ -52,7 +48,7 @@ class _FakeStructuredModel(BaseModel):
     maybe: str | None = None
 
 
-def test_chat_turn_and_stream_event_validators_reject_invalid_combinations() -> None:
+def test_chat_turn_response_validators_reject_invalid_combinations() -> None:
     tool_call = ChatToolCall(call_id="call-1", tool_name="read_file", arguments={})
     assistant = ChatMessage(role="assistant", content="hello")
 
@@ -87,46 +83,6 @@ def test_chat_turn_and_stream_event_validators_reject_invalid_combinations() -> 
 
     with pytest.raises(ValueError, match="requires final_response"):
         ChatTurnResponse(assistant_message=assistant, finish_reason="final_response")
-
-    with pytest.raises(ValueError, match="does not allow tool_calls"):
-        ChatTurnResponse(
-            assistant_message=assistant,
-            tool_calls=[tool_call],
-            finish_reason="interrupted",
-        )
-
-    with pytest.raises(ValueError, match="does not allow final_response"):
-        ChatTurnResponse(
-            assistant_message=assistant,
-            final_response=ChatFinalResponse(answer="done"),
-            finish_reason="interrupted",
-        )
-
-    with pytest.raises(ValueError, match="non-empty delta_text"):
-        ChatAssistantDeltaEvent(delta_text="", accumulated_text="")
-
-    with pytest.raises(ValueError, match="role='assistant'"):
-        ChatToolCallsEvent(
-            assistant_message=ChatMessage(role="user", content="bad"),
-            tool_calls=[tool_call],
-        )
-
-    with pytest.raises(ValueError, match="at least one tool call"):
-        ChatToolCallsEvent(
-            assistant_message=assistant,
-            tool_calls=[],
-        )
-
-    with pytest.raises(ValueError, match="role='assistant'"):
-        ChatFinalResponseEvent(
-            assistant_message=ChatMessage(role="user", content="bad"),
-            final_response=ChatFinalResponse(answer="done"),
-        )
-
-    with pytest.raises(ValueError, match="role='assistant'"):
-        ChatInterruptedEvent(
-            assistant_message=ChatMessage(role="user", content="bad"),
-        )
 
 
 def test_runtime_argument_and_turn_models_validate_expected_states() -> None:
@@ -198,9 +154,7 @@ def test_config_loader_rejects_missing_path_directory_invalid_yaml_and_root_shap
         load_chat_config(wrong_root)
 
 
-def test_mock_client_covers_section_payloads_default_payloads_and_interrupted_stream() -> (
-    None
-):
+def test_mock_client_covers_section_payloads_default_payloads_and_chat_turns() -> None:
     client = MockLLMClient()
 
     section_draft = client.generate_structured(
@@ -251,11 +205,6 @@ def test_mock_client_covers_section_payloads_default_payloads_and_interrupted_st
     assert default_payload.maybe is None
 
     tool_call = ChatToolCall(call_id="call-1", tool_name="search_text", arguments={})
-    interrupted_turn = ChatTurnResponse(
-        assistant_message=ChatMessage(role="assistant", content="partial"),
-        raw_text="partial",
-        finish_reason="interrupted",
-    )
     tool_turn = ChatTurnResponse(
         assistant_message=ChatMessage(
             role="assistant",
@@ -265,30 +214,16 @@ def test_mock_client_covers_section_payloads_default_payloads_and_interrupted_st
         tool_calls=[tool_call],
         finish_reason="tool_calls",
     )
-    scripted_client = MockLLMClient(chat_canned_turns=[tool_turn, interrupted_turn])
-
-    tool_stream_events = list(
-        scripted_client.stream_chat_turn(
-            ChatTurnRequest(
-                messages=[ChatMessage(role="user", content="hello")],
-                response_model=ChatFinalResponse,
-                model_name="mock-chat",
-            )
+    scripted_client = MockLLMClient(chat_canned_turns=[tool_turn])
+    scripted_turn = scripted_client.generate_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_model=ChatFinalResponse,
+            model_name="mock-chat",
         )
     )
-    assert isinstance(tool_stream_events[-1], ChatToolCallsEvent)
-
-    interrupted_events = list(
-        scripted_client.stream_chat_turn(
-            ChatTurnRequest(
-                messages=[ChatMessage(role="user", content="hello")],
-                response_model=ChatFinalResponse,
-                model_name="mock-chat",
-            )
-        )
-    )
-    assert isinstance(interrupted_events[-1], ChatInterruptedEvent)
-    assert interrupted_events[-1].reason == "Interrupted by mock provider."
+    assert scripted_turn.finish_reason == "tool_calls"
+    assert scripted_turn.tool_calls == [tool_call]
 
     fallback_turn = client.generate_chat_turn(
         ChatTurnRequest(
@@ -298,18 +233,6 @@ def test_mock_client_covers_section_payloads_default_payloads_and_interrupted_st
         )
     )
     assert fallback_turn.finish_reason == "final_response"
-
-    fallback_stream_events = list(
-        client.stream_chat_turn(
-            ChatTurnRequest(
-                messages=[ChatMessage(role="user", content="hello")],
-                response_model=ChatFinalResponse,
-                model_name="mock-chat",
-            )
-        )
-    )
-    assert isinstance(fallback_stream_events[0], ChatAssistantDeltaEvent)
-    assert isinstance(fallback_stream_events[-1], ChatFinalResponseEvent)
 
 
 @pytest.mark.parametrize(
@@ -390,60 +313,17 @@ def test_ollama_client_uses_openai_compatible_transport(
     )
 
 
-def test_ollama_stream_cancel_closes_openai_compatible_stream(
+def test_openai_compatible_client_has_no_streaming_entrypoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _FakeStreamingResponse:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def __iter__(self):
-            yield SimpleNamespace(
-                type="content.delta",
-                delta="partial",
-                chunk=SimpleNamespace(usage=None),
-            )
-
-        def close(self) -> None:
-            self.closed = True
-
-        def get_final_completion(self) -> object:
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content="unused",
-                            parsed=ChatFinalResponse(answer="unused"),
-                            tool_calls=[],
-                        )
-                    )
-                ]
-            )
-
-    class _FakeStreamingManager:
-        def __init__(self, stream: _FakeStreamingResponse) -> None:
-            self.stream = stream
-
-        def __enter__(self) -> _FakeStreamingResponse:
-            return self.stream
-
-        def __exit__(self, exc_type, exc, exc_tb) -> None:
-            del exc_type, exc, exc_tb
-            self.stream.close()
-
     class _FakeOpenAIClient:
-        last_stream: _FakeStreamingResponse | None = None
-
         def __init__(self, **kwargs: object) -> None:
             del kwargs
             self.beta = SimpleNamespace(
-                chat=SimpleNamespace(completions=SimpleNamespace(stream=self._stream))
+                chat=SimpleNamespace(
+                    completions=SimpleNamespace(parse=lambda **_: None)
+                )
             )
-
-        def _stream(self, **payload: object) -> object:
-            del payload
-            type(self).last_stream = _FakeStreamingResponse()
-            return _FakeStreamingManager(type(self).last_stream)
 
     monkeypatch.setattr(openai_compatible_module, "OpenAI", _FakeOpenAIClient)
 
@@ -454,21 +334,10 @@ def test_ollama_stream_cancel_closes_openai_compatible_stream(
         api_key="ollama",
         base_url=openai_compatible_module.normalize_ollama_base_url(None),
     )
-    cancelled = client.stream_chat_turn(
-        ChatTurnRequest(
-            messages=[ChatMessage(role="user", content="hello")],
-            response_model=ChatFinalResponse,
-            model_name="qwen",
-        )
-    )
-    cancelled.cancel()
-    cancelled_events = list(cancelled)
-    assert isinstance(cancelled_events[-1], ChatInterruptedEvent)
-    assert _FakeOpenAIClient.last_stream is not None
-    assert _FakeOpenAIClient.last_stream.closed is True
+    assert not hasattr(client, "stream_chat_turn")
 
 
-def test_openai_compatible_helpers_cover_serialization_and_stream_fallbacks() -> None:
+def test_openai_compatible_helpers_cover_serialization_and_parsing_fallbacks() -> None:
     tool_result = ChatToolResult(
         call_id="call-1", tool_name="search_text", payload={"query": "TODO"}
     )
@@ -571,91 +440,3 @@ def test_openai_compatible_helpers_cover_serialization_and_stream_fallbacks() ->
     )
     assert json_model == ChatFinalResponse(answer="From JSON")
     assert json_raw_text == '{"answer":"From JSON"}'
-
-    class _Stream:
-        def __init__(self, events, final_completion):
-            self._events = events
-            self._final_completion = final_completion
-            self.closed = False
-
-        def __iter__(self):
-            yield from self._events
-
-        def close(self):
-            self.closed = True
-
-        def get_final_completion(self):
-            return self._final_completion
-
-    final_stream = openai_compatible_module._OpenAICompatibleChatTurnStream(
-        provider_name="openai",
-        stream=_Stream(
-            [
-                SimpleNamespace(
-                    type="content.delta",
-                    delta="Hi",
-                    chunk=SimpleNamespace(usage=None),
-                ),
-            ],
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content="Hi",
-                            parsed=ChatFinalResponse(answer="Hi"),
-                            tool_calls=[],
-                        )
-                    )
-                ]
-            ),
-        ),
-        response_model=ChatFinalResponse,
-    )
-    final_events = list(final_stream)
-    assert isinstance(final_events[0], ChatAssistantDeltaEvent)
-    assert isinstance(final_events[-1], ChatFinalResponseEvent)
-
-    tool_stream = openai_compatible_module._OpenAICompatibleChatTurnStream(
-        provider_name="openai",
-        stream=_Stream(
-            [
-                SimpleNamespace(
-                    type="content.delta",
-                    delta="Searching...",
-                    chunk=SimpleNamespace(usage=None),
-                )
-            ],
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content="Searching...",
-                            parsed=None,
-                            tool_calls=[
-                                SimpleNamespace(
-                                    id="call-1",
-                                    function=SimpleNamespace(
-                                        name="search_text",
-                                        arguments='{"query":"TODO"}',
-                                        parsed_arguments={"query": "TODO"},
-                                    ),
-                                )
-                            ],
-                        )
-                    )
-                ]
-            ),
-        ),
-        response_model=ChatFinalResponse,
-    )
-    tool_events = list(tool_stream)
-    assert isinstance(tool_events[0], ChatAssistantDeltaEvent)
-    assert isinstance(tool_events[-1], ChatToolCallsEvent)
-
-    empty_stream = openai_compatible_module._OpenAICompatibleChatTurnStream(
-        provider_name="openai",
-        stream=_Stream([], SimpleNamespace(choices=[])),
-        response_model=ChatFinalResponse,
-    )
-    with pytest.raises(Exception, match="ended without a final completion"):
-        list(empty_stream)

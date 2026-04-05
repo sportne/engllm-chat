@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, TypeAlias, TypeVar
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
@@ -65,9 +64,7 @@ class ChatTurnResponse:
     final_response: BaseModel | None = None
     token_usage: ChatTokenUsage | None = None
     raw_text: str = ""
-    finish_reason: Literal["tool_calls", "final_response", "interrupted"] = (
-        "final_response"
-    )
+    finish_reason: Literal["tool_calls", "final_response"] = "final_response"
 
     def __post_init__(self) -> None:
         """Validate finish-reason and payload invariants."""
@@ -86,101 +83,10 @@ class ChatTurnResponse:
                 )
             return
 
-        if self.finish_reason == "final_response":
-            if self.tool_calls:
-                raise ValueError(
-                    "finish_reason='final_response' does not allow tool_calls"
-                )
-            if self.final_response is None:
-                raise ValueError(
-                    "finish_reason='final_response' requires final_response"
-                )
-            return
-
         if self.tool_calls:
-            raise ValueError("finish_reason='interrupted' does not allow tool_calls")
-        if self.final_response is not None:
-            raise ValueError(
-                "finish_reason='interrupted' does not allow final_response"
-            )
-
-
-@dataclass(frozen=True)
-class ChatAssistantDeltaEvent:
-    """One incremental assistant text chunk from a streaming turn."""
-
-    delta_text: str
-    accumulated_text: str
-    event_type: Literal["assistant_delta"] = "assistant_delta"
-
-    def __post_init__(self) -> None:
-        if not self.delta_text:
-            raise ValueError("assistant delta events require non-empty delta_text")
-
-
-@dataclass(frozen=True)
-class ChatToolCallsEvent:
-    """Terminal tool-call event for a streaming turn."""
-
-    assistant_message: ChatMessage
-    tool_calls: list[ChatToolCall]
-    token_usage: ChatTokenUsage | None = None
-    raw_text: str = ""
-    event_type: Literal["tool_calls"] = "tool_calls"
-
-    def __post_init__(self) -> None:
-        if self.assistant_message.role != "assistant":
-            raise ValueError("assistant_message must have role='assistant'")
-        if not self.tool_calls:
-            raise ValueError("tool call events require at least one tool call")
-
-
-@dataclass(frozen=True)
-class ChatFinalResponseEvent:
-    """Terminal final-response event for a streaming turn."""
-
-    assistant_message: ChatMessage
-    final_response: BaseModel
-    token_usage: ChatTokenUsage | None = None
-    raw_text: str = ""
-    event_type: Literal["final_response"] = "final_response"
-
-    def __post_init__(self) -> None:
-        if self.assistant_message.role != "assistant":
-            raise ValueError("assistant_message must have role='assistant'")
-
-
-@dataclass(frozen=True)
-class ChatInterruptedEvent:
-    """Terminal interrupted event for a streaming turn."""
-
-    assistant_message: ChatMessage
-    token_usage: ChatTokenUsage | None = None
-    raw_text: str = ""
-    reason: str = "Interrupted"
-    event_type: Literal["interrupted"] = "interrupted"
-
-    def __post_init__(self) -> None:
-        if self.assistant_message.role != "assistant":
-            raise ValueError("assistant_message must have role='assistant'")
-
-
-ChatTurnStreamEvent: TypeAlias = (
-    ChatAssistantDeltaEvent
-    | ChatToolCallsEvent
-    | ChatFinalResponseEvent
-    | ChatInterruptedEvent
-)
-
-
-class ChatTurnStream(Protocol):
-    """Provider-neutral streaming turn handle with explicit cancellation."""
-
-    def __iter__(self) -> Iterator[ChatTurnStreamEvent]:
-        """Yield streaming turn events until one terminal event is produced."""
-
-    def cancel(self) -> None:
-        """Request cancellation of the active streaming turn."""
+            raise ValueError("finish_reason='final_response' does not allow tool_calls")
+        if self.final_response is None:
+            raise ValueError("finish_reason='final_response' requires final_response")
 
 
 class LLMClient(Protocol):
@@ -201,12 +107,6 @@ class ChatLLMClient(Protocol):
         request: ChatTurnRequest,
     ) -> ChatTurnResponse:
         """Generate one complete non-streaming chat turn result."""
-
-    def stream_chat_turn(
-        self,
-        request: ChatTurnRequest,
-    ) -> ChatTurnStream:
-        """Generate one streaming chat turn result with cancellation support."""
 
 
 def validate_payload(

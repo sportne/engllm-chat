@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from engllm_chat.core.tokenize import tokenize
-from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import (
     ChatConfig,
     ChatFinalResponse,
@@ -19,10 +18,6 @@ from engllm_chat.domain.models import (
     ChatToolLimits,
 )
 from engllm_chat.llm.base import (
-    ChatAssistantDeltaEvent,
-    ChatFinalResponseEvent,
-    ChatInterruptedEvent,
-    ChatToolCallsEvent,
     ChatTurnRequest,
     ChatTurnResponse,
 )
@@ -32,7 +27,6 @@ from engllm_chat.prompts.chat import build_chat_system_prompt
 from engllm_chat.tools.chat.models import (
     ChatSessionState,
     ChatSessionTurnRecord,
-    ChatWorkflowAssistantDeltaEvent,
     ChatWorkflowResultEvent,
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
@@ -104,59 +98,6 @@ class _RecordingChatClient:
         if not self._responses:
             raise AssertionError("No canned chat responses remain")
         return self._responses.pop(0)
-
-
-class _ScriptedStreamingHandle:
-    def __init__(self, events: list[object]) -> None:
-        self._events = list(events)
-        self.cancelled = False
-        self._accumulated_text = ""
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-    def __iter__(self):
-        for event in self._events:
-            if self.cancelled:
-                yield ChatInterruptedEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        content=self._accumulated_text or None,
-                        completion_state="interrupted",
-                    ),
-                    raw_text=self._accumulated_text,
-                    reason="Interrupted by test.",
-                )
-                return
-            if isinstance(event, ChatAssistantDeltaEvent):
-                self._accumulated_text = event.accumulated_text
-            yield event
-
-
-class _RecordingStreamingChatClient:
-    def __init__(self, streams: list[list[object]]) -> None:
-        self._streams = [list(stream) for stream in streams]
-        self.requests: list[ChatTurnRequest] = []
-        self.handles: list[_ScriptedStreamingHandle] = []
-
-    def generate_chat_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
-        raise AssertionError("generate_chat_turn should not be used in streaming tests")
-
-    def stream_chat_turn(self, request: ChatTurnRequest):
-        self.requests.append(
-            ChatTurnRequest(
-                messages=list(request.messages),
-                response_model=request.response_model,
-                model_name=request.model_name,
-                tools=list(request.tools),
-                temperature=request.temperature,
-            )
-        )
-        if not self._streams:
-            raise AssertionError("No canned streaming responses remain")
-        handle = _ScriptedStreamingHandle(self._streams.pop(0))
-        self.handles.append(handle)
-        return handle
 
 
 def test_build_chat_system_prompt_includes_tool_catalog_and_examples() -> None:
@@ -836,29 +777,6 @@ def test_run_chat_turn_allows_exact_total_tool_call_limit(tmp_path: Path) -> Non
     assert len(result.tool_results) == 2
 
 
-def test_run_chat_turn_raises_on_interrupted_provider_response(
-    tmp_path: Path,
-) -> None:
-    client = MockLLMClient(
-        chat_canned_turns=[
-            ChatTurnResponse(
-                assistant_message=ChatMessage(role="assistant", content="partial"),
-                raw_text="partial",
-                finish_reason="interrupted",
-            )
-        ]
-    )
-
-    with pytest.raises(LLMError, match="interrupted turn"):
-        run_chat_turn(
-            user_message="Hello",
-            prior_messages=[],
-            root_path=tmp_path,
-            config=ChatConfig(),
-            llm_client=client,
-        )
-
-
 def test_run_chat_session_turn_stores_turns_and_reuses_follow_up_context(
     tmp_path: Path,
 ) -> None:
@@ -1195,96 +1113,79 @@ def test_chat_workflow_models_validate_required_fields() -> None:
         )
 
 
-def test_run_streaming_chat_session_turn_emits_status_delta_and_completed_result(
+def test_run_streaming_chat_session_turn_emits_status_and_completed_result(
     tmp_path: Path,
 ) -> None:
-    client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatAssistantDeltaEvent(
-                    delta_text='{"answer":"Known"}',
-                    accumulated_text='{"answer":"Known"}',
+    client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    content='{"answer":"Known"}',
                 ),
-                ChatFinalResponseEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        content='{"answer":"Known"}',
-                    ),
-                    final_response=ChatFinalResponse(answer="Known"),
-                    token_usage=ChatTokenUsage(total_tokens=9),
-                    raw_text='{"answer":"Known"}',
-                ),
-            ]
+                final_response=ChatFinalResponse(answer="Known"),
+                token_usage=ChatTokenUsage(total_tokens=9),
+                raw_text='{"answer":"Known"}',
+            )
         ]
     )
 
-    stream = run_streaming_chat_session_turn(
-        user_message="What is here?",
-        session_state=ChatSessionState(),
-        root_path=tmp_path,
-        config=ChatConfig(),
-        llm_client=client,
+    events = list(
+        run_streaming_chat_session_turn(
+            user_message="What is here?",
+            session_state=ChatSessionState(),
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=client,
+        )
     )
 
-    events = list(stream)
-
-    assert isinstance(events[0], ChatWorkflowStatusEvent)
-    assert events[0].status == "thinking"
-    assert isinstance(events[1], ChatWorkflowStatusEvent)
-    assert events[1].status == "drafting answer"
-    assert isinstance(events[2], ChatWorkflowAssistantDeltaEvent)
-    assert events[2].accumulated_text == '{"answer":"Known"}'
-    assert isinstance(events[3], ChatWorkflowResultEvent)
-    assert events[3].result.status == "completed"
-    assert events[3].result.final_response is not None
-    assert events[3].result.final_response.answer == "Known"
-    assert events[3].result.session_state is not None
-    assert events[3].result.session_state.turns[0].status == "completed"
+    assert [
+        event.status for event in events if isinstance(event, ChatWorkflowStatusEvent)
+    ] == [
+        "thinking",
+        "drafting answer",
+    ]
+    result_event = next(
+        event for event in events if isinstance(event, ChatWorkflowResultEvent)
+    )
+    assert result_event.result.status == "completed"
+    assert result_event.result.final_response is not None
+    assert result_event.result.final_response.answer == "Known"
+    assert result_event.result.session_state is not None
+    assert result_event.result.session_state.turns[0].status == "completed"
+    assert len(client.requests) == 1
 
 
 def test_run_streaming_chat_session_turn_executes_tool_rounds_and_statuses(
     tmp_path: Path,
 ) -> None:
     _write(tmp_path / "src" / "app.py", "print('hi')\n")
-    client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        tool_calls=[
-                            ChatToolCall(
-                                call_id="call-1",
-                                tool_name="find_files",
-                                arguments={"path": "src", "pattern": "**/*.py"},
-                            )
-                        ],
-                    ),
-                    tool_calls=[
-                        ChatToolCall(
-                            call_id="call-1",
-                            tool_name="find_files",
-                            arguments={"path": "src", "pattern": "**/*.py"},
-                        )
-                    ],
-                    token_usage=ChatTokenUsage(total_tokens=3),
-                )
-            ],
-            [
-                ChatAssistantDeltaEvent(
-                    delta_text='{"answer":"Found src/app.py"}',
-                    accumulated_text='{"answer":"Found src/app.py"}',
+    tool_call = ChatToolCall(
+        call_id="call-1",
+        tool_name="find_files",
+        arguments={"path": "src", "pattern": "**/*.py"},
+    )
+    client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    tool_calls=[tool_call],
                 ),
-                ChatFinalResponseEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        content='{"answer":"Found src/app.py"}',
-                    ),
-                    final_response=ChatFinalResponse(answer="Found src/app.py"),
-                    token_usage=ChatTokenUsage(total_tokens=8),
-                    raw_text='{"answer":"Found src/app.py"}',
+                tool_calls=[tool_call],
+                token_usage=ChatTokenUsage(total_tokens=3),
+                finish_reason="tool_calls",
+            ),
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    content='{"answer":"Found src/app.py"}',
                 ),
-            ],
+                final_response=ChatFinalResponse(answer="Found src/app.py"),
+                token_usage=ChatTokenUsage(total_tokens=8),
+                raw_text='{"answer":"Found src/app.py"}',
+            ),
         ]
     )
 
@@ -1311,25 +1212,25 @@ def test_run_streaming_chat_session_turn_executes_tool_rounds_and_statuses(
     assert result_events[0].result.final_response.answer == "Found src/app.py"
 
 
-def test_run_streaming_chat_session_turn_cancel_preserves_interrupted_message(
+def test_run_streaming_chat_session_turn_cancel_stops_before_tool_execution(
     tmp_path: Path,
 ) -> None:
-    client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatAssistantDeltaEvent(
-                    delta_text='{"answer":"partial"',
-                    accumulated_text='{"answer":"partial"',
+    tool_call = ChatToolCall(
+        call_id="call-1",
+        tool_name="find_files",
+        arguments={"path": ".", "pattern": "**/*.py"},
+    )
+    client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    content="Searching",
+                    tool_calls=[tool_call],
                 ),
-                ChatFinalResponseEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        content='{"answer":"partial done"}',
-                    ),
-                    final_response=ChatFinalResponse(answer="partial done"),
-                    raw_text='{"answer":"partial done"}',
-                ),
-            ]
+                tool_calls=[tool_call],
+                finish_reason="tool_calls",
+            )
         ]
     )
 
@@ -1343,29 +1244,30 @@ def test_run_streaming_chat_session_turn_cancel_preserves_interrupted_message(
 
     iterator = iter(stream)
     assert isinstance(next(iterator), ChatWorkflowStatusEvent)
-    assert isinstance(next(iterator), ChatWorkflowStatusEvent)
-    delta_event = next(iterator)
-    assert isinstance(delta_event, ChatWorkflowAssistantDeltaEvent)
+    tool_status = next(iterator)
+    assert isinstance(tool_status, ChatWorkflowStatusEvent)
+    assert tool_status.status == "listing files"
     stream.cancel()
     remaining = list(iterator)
 
     assert len(remaining) == 1
     assert isinstance(remaining[0], ChatWorkflowResultEvent)
     assert remaining[0].result.status == "interrupted"
-    assert remaining[0].result.interruption_reason == "Interrupted by test."
-    interrupted_message = next(
+    assert remaining[0].result.interruption_reason == "Interrupted by user."
+    assert remaining[0].result.tool_results == []
+    assistant_message = next(
         message
         for message in remaining[0].result.new_messages
         if message.role == "assistant"
     )
-    assert interrupted_message.completion_state == "interrupted"
-    assert interrupted_message.content == '{"answer":"partial"'
+    assert assistant_message.content == "Searching"
+    assert assistant_message.completion_state == "complete"
 
 
 def test_run_streaming_chat_session_turn_cancel_before_iteration_returns_interrupted(
     tmp_path: Path,
 ) -> None:
-    client = _RecordingStreamingChatClient(streams=[])
+    client = _RecordingChatClient(responses=[])
     stream = run_streaming_chat_session_turn(
         user_message="Question",
         session_state=ChatSessionState(),
@@ -1385,22 +1287,6 @@ def test_run_streaming_chat_session_turn_cancel_before_iteration_returns_interru
     assert events[1].result.interruption_reason == "Interrupted by user."
 
 
-def test_run_streaming_chat_session_turn_raises_when_stream_has_no_terminal_event(
-    tmp_path: Path,
-) -> None:
-    client = _RecordingStreamingChatClient(streams=[[]])
-    stream = run_streaming_chat_session_turn(
-        user_message="Question",
-        session_state=ChatSessionState(),
-        root_path=tmp_path,
-        config=ChatConfig(),
-        llm_client=client,
-    )
-
-    with pytest.raises(LLMError, match="without a terminal event"):
-        list(stream)
-
-
 def test_run_streaming_chat_session_turn_needs_continuation_for_stream_limits(
     tmp_path: Path,
 ) -> None:
@@ -1411,23 +1297,22 @@ def test_run_streaming_chat_session_turn_needs_continuation_for_stream_limits(
         arguments={"path": "src", "pattern": "**/*.py"},
     )
 
-    per_round_client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        tool_calls=[
-                            tool_call,
-                            tool_call.model_copy(update={"call_id": "call-2"}),
-                        ],
-                    ),
+    per_round_client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
                     tool_calls=[
                         tool_call,
                         tool_call.model_copy(update={"call_id": "call-2"}),
                     ],
-                )
-            ]
+                ),
+                tool_calls=[
+                    tool_call,
+                    tool_call.model_copy(update={"call_id": "call-2"}),
+                ],
+                finish_reason="tool_calls",
+            )
         ]
     )
     per_round_config = ChatConfig.model_validate(
@@ -1450,26 +1335,24 @@ def test_run_streaming_chat_session_turn_needs_continuation_for_stream_limits(
     assert per_round_result.status == "needs_continuation"
     assert "one round than allowed" in (per_round_result.continuation_reason or "")
 
-    total_budget_client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        tool_calls=[tool_call],
-                    ),
+    total_budget_client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
                     tool_calls=[tool_call],
-                )
-            ],
-            [
-                ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        tool_calls=[tool_call.model_copy(update={"call_id": "call-2"})],
-                    ),
+                ),
+                tool_calls=[tool_call],
+                finish_reason="tool_calls",
+            ),
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
                     tool_calls=[tool_call.model_copy(update={"call_id": "call-2"})],
-                )
-            ],
+                ),
+                tool_calls=[tool_call.model_copy(update={"call_id": "call-2"})],
+                finish_reason="tool_calls",
+            ),
         ]
     )
     total_budget_config = ChatConfig.model_validate(
@@ -1492,17 +1375,16 @@ def test_run_streaming_chat_session_turn_needs_continuation_for_stream_limits(
     assert total_budget_result.status == "needs_continuation"
     assert "total tool-call budget" in (total_budget_result.continuation_reason or "")
 
-    round_trip_client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        tool_calls=[tool_call],
-                    ),
+    round_trip_client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
                     tool_calls=[tool_call],
-                )
-            ]
+                ),
+                tool_calls=[tool_call],
+                finish_reason="tool_calls",
+            )
         ]
     )
     round_trip_config = ChatConfig.model_validate(
@@ -1530,57 +1412,34 @@ def test_run_streaming_chat_session_turn_status_labels_cover_search_and_read(
     tmp_path: Path,
 ) -> None:
     _write(tmp_path / "src" / "app.py", "alpha\nbeta\n")
-    client = _RecordingStreamingChatClient(
-        streams=[
-            [
-                ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        tool_calls=[
-                            ChatToolCall(
-                                call_id="call-1",
-                                tool_name="search_text",
-                                arguments={"path": "src", "query": "alpha"},
-                            ),
-                            ChatToolCall(
-                                call_id="call-2",
-                                tool_name="read_file",
-                                arguments={
-                                    "path": "src/app.py",
-                                    "start_char": 0,
-                                    "end_char": 5,
-                                },
-                            ),
-                        ],
-                    ),
-                    tool_calls=[
-                        ChatToolCall(
-                            call_id="call-1",
-                            tool_name="search_text",
-                            arguments={"path": "src", "query": "alpha"},
-                        ),
-                        ChatToolCall(
-                            call_id="call-2",
-                            tool_name="read_file",
-                            arguments={
-                                "path": "src/app.py",
-                                "start_char": 0,
-                                "end_char": 5,
-                            },
-                        ),
-                    ],
-                )
-            ],
-            [
-                ChatFinalResponseEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        content='{"answer":"Done"}',
-                    ),
-                    final_response=ChatFinalResponse(answer="Done"),
-                    raw_text='{"answer":"Done"}',
-                )
-            ],
+    search_call = ChatToolCall(
+        call_id="call-1",
+        tool_name="search_text",
+        arguments={"path": "src", "query": "alpha"},
+    )
+    read_call = ChatToolCall(
+        call_id="call-2",
+        tool_name="read_file",
+        arguments={"path": "src/app.py", "start_char": 0, "end_char": 5},
+    )
+    client = _RecordingChatClient(
+        responses=[
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    tool_calls=[search_call, read_call],
+                ),
+                tool_calls=[search_call, read_call],
+                finish_reason="tool_calls",
+            ),
+            ChatTurnResponse(
+                assistant_message=ChatMessage(
+                    role="assistant",
+                    content='{"answer":"Done"}',
+                ),
+                final_response=ChatFinalResponse(answer="Done"),
+                raw_text='{"answer":"Done"}',
+            ),
         ]
     )
 

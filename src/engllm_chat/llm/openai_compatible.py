@@ -4,24 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import urllib.parse
-from collections.abc import Iterator
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
 from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import ChatMessage, ChatTokenUsage, ChatToolCall
 from engllm_chat.llm.base import (
-    ChatAssistantDeltaEvent,
-    ChatFinalResponseEvent,
-    ChatInterruptedEvent,
-    ChatToolCallsEvent,
     ChatToolDefinition,
     ChatTurnRequest,
     ChatTurnResponse,
-    ChatTurnStream,
     validate_json_text,
     validate_payload,
 )
@@ -236,164 +229,6 @@ def _extract_final_response(
     raise LLMError("OpenAI-compatible response missing assistant content")
 
 
-class _StreamingChatResponse(Protocol):
-    def __iter__(self) -> Iterator[Any]:
-        """Yield SDK streaming events."""
-
-    def close(self) -> None:
-        """Close the underlying stream."""
-
-    def get_final_completion(self) -> Any:
-        """Return the final accumulated parsed completion."""
-
-
-class _StreamingChatResponseManager(Protocol):
-    def __enter__(self) -> _StreamingChatResponse:
-        """Enter the SDK stream manager."""
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        exc_tb: Any,
-    ) -> None:
-        """Close the SDK stream manager."""
-
-
-class _OpenAICompatibleChatTurnStream:
-    """Streaming OpenAI-compatible chat handle with cooperative cancellation."""
-
-    def __init__(
-        self,
-        *,
-        provider_name: str,
-        stream: _StreamingChatResponse,
-        response_model: type,
-        stream_manager: _StreamingChatResponseManager | None = None,
-    ) -> None:
-        self._provider_name = provider_name
-        self._stream = stream
-        self._stream_manager = stream_manager
-        self._response_model = response_model
-        self._cancel_requested = threading.Event()
-        self._accumulated_text = ""
-        self._closed = False
-        self._last_usage: ChatTokenUsage | None = None
-
-    def cancel(self) -> None:
-        self._cancel_requested.set()
-        self._close_stream()
-
-    def __iter__(
-        self,
-    ) -> Iterator[
-        ChatAssistantDeltaEvent
-        | ChatToolCallsEvent
-        | ChatFinalResponseEvent
-        | ChatInterruptedEvent
-    ]:
-        try:
-            for event in self._stream:
-                if self._cancel_requested.is_set():
-                    yield self._build_interrupted_event()
-                    return
-
-                usage = _extract_token_usage(getattr(event, "chunk", event))
-                if usage is not None:
-                    self._last_usage = usage
-
-                if getattr(event, "type", None) == "content.delta":
-                    delta_text = getattr(event, "delta", None)
-                    if isinstance(delta_text, str) and delta_text:
-                        self._accumulated_text += delta_text
-                        yield ChatAssistantDeltaEvent(
-                            delta_text=delta_text,
-                            accumulated_text=self._accumulated_text,
-                        )
-
-            if self._cancel_requested.is_set():
-                yield self._build_interrupted_event()
-                return
-
-            final_completion = self._stream.get_final_completion()
-            usage = _extract_token_usage(final_completion)
-            if usage is not None:
-                self._last_usage = usage
-
-            choices = getattr(final_completion, "choices", None)
-            if not isinstance(choices, list) or not choices:
-                raise LLMError(
-                    f"{self._provider_name} stream ended without a final completion."
-                )
-
-            message = getattr(choices[0], "message", None)
-            if message is None:
-                raise LLMError(
-                    f"{self._provider_name} stream ended without an assistant message."
-                )
-
-            tool_calls = _extract_tool_calls(message)
-            if tool_calls:
-                yield ChatToolCallsEvent(
-                    assistant_message=ChatMessage(
-                        role="assistant",
-                        content=_extract_message_text(message).strip() or None,
-                        tool_calls=tool_calls,
-                    ),
-                    tool_calls=tool_calls,
-                    token_usage=self._last_usage,
-                    raw_text=_extract_message_text(message).strip(),
-                )
-                return
-
-            parsed, raw_text = _extract_final_response(self._response_model, message)
-            if raw_text:
-                self._accumulated_text = raw_text
-            yield ChatFinalResponseEvent(
-                assistant_message=ChatMessage(
-                    role="assistant",
-                    content=raw_text,
-                ),
-                final_response=parsed,
-                token_usage=self._last_usage,
-                raw_text=raw_text,
-            )
-            return
-        except Exception as exc:  # pragma: no cover - provider/network dependent
-            if self._cancel_requested.is_set():
-                yield self._build_interrupted_event()
-                return
-            raise LLMError(
-                f"{self._provider_name} streaming request failed: {exc}"
-            ) from exc
-        finally:
-            self._close_stream()
-
-    def _build_interrupted_event(self) -> ChatInterruptedEvent:
-        return ChatInterruptedEvent(
-            assistant_message=ChatMessage(
-                role="assistant",
-                content=self._accumulated_text or None,
-                completion_state="interrupted",
-            ),
-            token_usage=self._last_usage,
-            raw_text=self._accumulated_text,
-            reason="Interrupted by stream cancellation.",
-        )
-
-    def _close_stream(self) -> None:
-        if self._closed:
-            return
-        try:
-            if self._stream_manager is not None:
-                self._stream_manager.__exit__(None, None, None)
-            else:
-                self._stream.close()
-        except Exception:
-            pass
-        self._closed = True
-
-
 class OpenAICompatibleChatLLMClient:
     """Chat adapter for providers exposing an OpenAI-compatible API surface."""
 
@@ -480,34 +315,4 @@ class OpenAICompatibleChatLLMClient:
             token_usage=token_usage,
             raw_text=content_text,
             finish_reason="final_response",
-        )
-
-    def stream_chat_turn(self, request: ChatTurnRequest) -> ChatTurnStream:
-        """Send one streaming chat turn to an OpenAI-compatible provider."""
-
-        payload: dict[str, object] = {
-            "model": request.model_name or self._model_name,
-            "messages": [
-                _serialize_chat_message(message) for message in request.messages
-            ],
-            "temperature": request.temperature,
-            "stream_options": {"include_usage": True},
-            "response_format": request.response_model,
-        }
-        if request.tools:
-            payload["tools"] = [
-                _serialize_tool_definition(tool) for tool in request.tools
-            ]
-        try:
-            stream_manager = self._client.beta.chat.completions.stream(**payload)
-            stream = stream_manager.__enter__()
-        except Exception as exc:  # pragma: no cover - provider/network dependent
-            raise LLMError(
-                f"{self._provider_name} streaming request failed: {exc}"
-            ) from exc
-        return _OpenAICompatibleChatTurnStream(
-            provider_name=self._provider_name,
-            stream=stream,
-            response_model=request.response_model,
-            stream_manager=stream_manager,
         )

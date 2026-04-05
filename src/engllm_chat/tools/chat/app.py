@@ -22,14 +22,13 @@ from engllm_chat.llm.base import ChatLLMClient
 from engllm_chat.llm.factory import create_chat_llm_client
 from engllm_chat.tools.chat.models import (
     ChatSessionState,
-    ChatWorkflowAssistantDeltaEvent,
     ChatWorkflowResultEvent,
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
 )
 from engllm_chat.tools.chat.workflow import (
-    ChatSessionTurnStream,
-    run_streaming_chat_session_turn,
+    ChatSessionTurnRunner,
+    run_interactive_chat_session_turn,
 )
 
 
@@ -212,11 +211,12 @@ class ChatScreen(Screen[None]):
         self._credential_secret: str | None = None
         self._busy = False
         self._active_assistant_entry: TranscriptEntry | None = None
-        self._active_stream: ChatSessionTurnStream | None = None
+        self._active_runner: ChatSessionTurnRunner | None = None
         self._pending_interrupt_draft: str | None = None
         self._footer_session_tokens: int | None = None
         self._footer_active_context_tokens: int | None = None
         self._footer_confidence: float | None = None
+        self._reveal_generation = 0
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-layout"):
@@ -378,7 +378,7 @@ class ChatScreen(Screen[None]):
         self._append_transcript("error", error_message)
         self._set_status("")
         self._busy = False
-        self._active_stream = None
+        self._active_runner = None
         self._active_assistant_entry = None
         self._refresh_footer()
         self.query_one("#composer", ComposerTextArea).focus()
@@ -387,15 +387,31 @@ class ChatScreen(Screen[None]):
         typed_event = ChatWorkflowStatusEvent.model_validate(event)
         self._set_status(typed_event.status)
 
-    def _handle_turn_delta(self, event: object) -> None:
-        typed_event = ChatWorkflowAssistantDeltaEvent.model_validate(event)
+    def _start_assistant_reveal(self, text: str) -> None:
+        self._reveal_generation += 1
+        generation = self._reveal_generation
         if self._active_assistant_entry is None:
-            self._active_assistant_entry = self._append_transcript(
-                "assistant",
-                typed_event.accumulated_text,
-            )
+            self._active_assistant_entry = self._append_transcript("assistant", "")
         else:
-            self._active_assistant_entry.update_text(typed_event.accumulated_text)
+            self._active_assistant_entry.update_text(
+                "", assistant_completion_state="complete"
+            )
+
+        chunk_size = max(1, len(text) // 24) if text else 1
+
+        def _step(index: int) -> None:
+            if generation != self._reveal_generation:
+                return
+            next_index = min(len(text), index + chunk_size)
+            if self._active_assistant_entry is not None:
+                self._active_assistant_entry.update_text(
+                    text[:next_index],
+                    assistant_completion_state="complete",
+                )
+            if next_index < len(text):
+                self.set_timer(0.01, lambda: _step(next_index))
+
+        _step(0)
 
     def _handle_turn_result(self, event: object) -> None:
         typed_event = ChatWorkflowResultEvent.model_validate(event)
@@ -410,16 +426,9 @@ class ChatScreen(Screen[None]):
         ):
             self._append_transcript("system", typed_result.continuation_reason)
         if typed_result.final_response is not None:
-            if self._active_assistant_entry is None:
-                self._active_assistant_entry = self._append_transcript(
-                    "assistant",
-                    _format_final_response(typed_result.final_response),
-                )
-            else:
-                self._active_assistant_entry.update_text(
-                    _format_final_response(typed_result.final_response),
-                    assistant_completion_state="complete",
-                )
+            self._start_assistant_reveal(
+                _format_final_response(typed_result.final_response)
+            )
         elif typed_result.status == "interrupted":
             interrupted_message = next(
                 (
@@ -461,9 +470,7 @@ class ChatScreen(Screen[None]):
         )
         self._set_status("")
         self._busy = False
-        self._active_stream = None
-        if typed_result.status != "interrupted":
-            self._active_assistant_entry = None
+        self._active_runner = None
         pending_draft = self._pending_interrupt_draft
         self._pending_interrupt_draft = None
         self._refresh_footer()
@@ -486,10 +493,10 @@ class ChatScreen(Screen[None]):
         return False
 
     def _cancel_active_turn(self, *, status_text: str) -> None:
-        if self._active_stream is None:
+        if self._active_runner is None:
             return
         self._set_status(status_text)
-        self._active_stream.cancel()
+        self._active_runner.cancel()
 
     def _submit_draft(self, raw_draft: str) -> None:
         if not raw_draft.strip():
@@ -505,6 +512,7 @@ class ChatScreen(Screen[None]):
         self._clear_composer()
         if self._handle_inline_command(raw_draft):
             return
+        self._reveal_generation += 1
         self._append_transcript("user", raw_draft)
         self._active_assistant_entry = None
         self._busy = True
@@ -534,24 +542,18 @@ class ChatScreen(Screen[None]):
             llm_client = self._llm_client
             if llm_client is None:
                 raise RuntimeError("Chat client is not configured.")
-            turn_stream = run_streaming_chat_session_turn(
+            turn_stream = run_interactive_chat_session_turn(
                 user_message=user_message,
                 session_state=self._session_state,
                 root_path=self._root_path,
                 config=self._config,
                 llm_client=llm_client,
             )
-            self._active_stream = turn_stream
+            self._active_runner = turn_stream
             for event in turn_stream:
                 if isinstance(event, ChatWorkflowStatusEvent):
                     self.app.call_from_thread(
                         self._handle_turn_status,
-                        event.model_dump(mode="json"),
-                    )
-                    continue
-                if isinstance(event, ChatWorkflowAssistantDeltaEvent):
-                    self.app.call_from_thread(
-                        self._handle_turn_delta,
                         event.model_dump(mode="json"),
                     )
                     continue
@@ -562,7 +564,7 @@ class ChatScreen(Screen[None]):
         except Exception as exc:
             self.app.call_from_thread(self._handle_turn_error, str(exc))
         finally:
-            self._active_stream = None
+            self._active_runner = None
 
 
 class ChatApp(App[None]):

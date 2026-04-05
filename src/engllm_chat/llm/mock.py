@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-import threading
-from collections.abc import Iterator
 from typing import Any
 
 from pydantic import BaseModel
@@ -17,68 +15,12 @@ from engllm_chat.domain.models import (
     SectionUpdateProposal,
 )
 from engllm_chat.llm.base import (
-    ChatAssistantDeltaEvent,
-    ChatFinalResponseEvent,
-    ChatInterruptedEvent,
-    ChatToolCallsEvent,
     ChatTurnRequest,
     ChatTurnResponse,
-    ChatTurnStream,
-    ChatTurnStreamEvent,
     StructuredGenerationRequest,
     StructuredGenerationResponse,
     validate_payload,
 )
-
-
-class _MockChatTurnStream:
-    """Deterministic in-memory streaming turn with cooperative cancellation."""
-
-    def __init__(self, events: list[ChatTurnStreamEvent]) -> None:
-        self._events = list(events)
-        self._cancel_requested = threading.Event()
-        self._interrupted_emitted = False
-        self._completed = False
-        self._accumulated_text = ""
-
-    def cancel(self) -> None:
-        self._cancel_requested.set()
-
-    def __iter__(self) -> Iterator[ChatTurnStreamEvent]:
-        for event in self._events:
-            if self._cancel_requested.is_set() and not self._completed:
-                yield self._build_interrupted_event()
-                return
-
-            if isinstance(event, ChatAssistantDeltaEvent):
-                self._accumulated_text = event.accumulated_text
-                yield event
-                continue
-
-            if isinstance(event, ChatToolCallsEvent | ChatFinalResponseEvent):
-                self._completed = True
-                yield event
-                return
-
-            self._completed = True
-            yield event
-            return
-
-        if self._cancel_requested.is_set() and not self._completed:
-            yield self._build_interrupted_event()
-
-    def _build_interrupted_event(self) -> ChatInterruptedEvent:
-        self._interrupted_emitted = True
-        self._completed = True
-        return ChatInterruptedEvent(
-            assistant_message=ChatMessage(
-                role="assistant",
-                content=self._accumulated_text or None,
-                completion_state="interrupted",
-            ),
-            raw_text=self._accumulated_text,
-            reason="Interrupted by mock stream cancellation.",
-        )
 
 
 class MockLLMClient:
@@ -89,16 +31,11 @@ class MockLLMClient:
         model_name: str = "mock-engllm",
         canned: dict[str, dict[str, Any]] | None = None,
         chat_canned_turns: list[ChatTurnResponse] | None = None,
-        chat_canned_streams: list[list[ChatTurnStreamEvent]] | None = None,
     ) -> None:
         self.model_name = model_name
         self.canned = canned or {}
         self._chat_canned_turns = list(chat_canned_turns or [])
         self._chat_turn_index = 0
-        self._chat_canned_streams = [
-            list(stream) for stream in chat_canned_streams or []
-        ]
-        self._chat_stream_index = 0
 
     def _extract_section_info(self, prompt: str) -> tuple[str, str]:
         section_id_match = re.search(r'"id"\s*:\s*"([^"]+)"', prompt)
@@ -213,94 +150,3 @@ class MockLLMClient:
             raw_text=raw_text,
             finish_reason="final_response",
         )
-
-    def stream_chat_turn(
-        self,
-        request: ChatTurnRequest,
-    ) -> ChatTurnStream:
-        """Return deterministic streaming chat turns without network calls."""
-
-        if self._chat_stream_index < len(self._chat_canned_streams):
-            stream = _MockChatTurnStream(
-                self._chat_canned_streams[self._chat_stream_index]
-            )
-            self._chat_stream_index += 1
-            return stream
-
-        if self._chat_turn_index < len(self._chat_canned_turns):
-            scripted_turn = self._chat_canned_turns[self._chat_turn_index]
-            self._chat_turn_index += 1
-            return _MockChatTurnStream(self._events_from_turn(scripted_turn))
-
-        payload = self._build_payload(
-            StructuredGenerationRequest(
-                system_prompt="",
-                user_prompt="",
-                response_model=request.response_model,
-                model_name=request.model_name,
-                temperature=request.temperature,
-            )
-        )
-        parsed = validate_payload(request.response_model, payload)
-        raw_text = parsed.model_dump_json()
-        return _MockChatTurnStream(
-            [
-                ChatAssistantDeltaEvent(
-                    delta_text=raw_text,
-                    accumulated_text=raw_text,
-                ),
-                ChatFinalResponseEvent(
-                    assistant_message=ChatMessage(role="assistant", content=raw_text),
-                    final_response=parsed,
-                    raw_text=raw_text,
-                ),
-            ]
-        )
-
-    def _events_from_turn(
-        self,
-        turn: ChatTurnResponse,
-    ) -> list[ChatTurnStreamEvent]:
-        events: list[ChatTurnStreamEvent] = []
-        content = turn.assistant_message.content or ""
-        if content:
-            events.append(
-                ChatAssistantDeltaEvent(
-                    delta_text=content,
-                    accumulated_text=content,
-                )
-            )
-
-        if turn.finish_reason == "tool_calls":
-            events.append(
-                ChatToolCallsEvent(
-                    assistant_message=turn.assistant_message,
-                    tool_calls=turn.tool_calls,
-                    token_usage=turn.token_usage,
-                    raw_text=turn.raw_text,
-                )
-            )
-            return events
-
-        if turn.finish_reason == "interrupted":
-            events.append(
-                ChatInterruptedEvent(
-                    assistant_message=turn.assistant_message.model_copy(
-                        update={"completion_state": "interrupted"}
-                    ),
-                    token_usage=turn.token_usage,
-                    raw_text=turn.raw_text,
-                    reason="Interrupted by mock provider.",
-                )
-            )
-            return events
-
-        events.append(
-            ChatFinalResponseEvent(
-                assistant_message=turn.assistant_message,
-                final_response=turn.final_response or ChatFinalResponse(answer="TBD"),
-                token_usage=turn.token_usage,
-                raw_text=turn.raw_text,
-            )
-        )
-        return events

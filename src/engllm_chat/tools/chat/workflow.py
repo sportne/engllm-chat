@@ -30,20 +30,14 @@ from engllm_chat.domain.models import (
     DomainModel,
 )
 from engllm_chat.llm.base import (
-    ChatAssistantDeltaEvent,
-    ChatFinalResponseEvent,
-    ChatInterruptedEvent,
     ChatLLMClient,
-    ChatToolCallsEvent,
     ChatToolDefinition,
     ChatTurnRequest,
-    ChatTurnStream,
 )
 from engllm_chat.prompts.chat import build_chat_system_prompt
 from engllm_chat.tools.chat.models import (
     ChatSessionState,
     ChatSessionTurnRecord,
-    ChatWorkflowAssistantDeltaEvent,
     ChatWorkflowResultEvent,
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
@@ -454,8 +448,8 @@ def _execute_tool_call(
         )
 
 
-class ChatSessionTurnStream:
-    """Session-aware streaming chat workflow with cooperative cancellation."""
+class ChatSessionTurnRunner:
+    """Session-aware cancellable chat workflow for the interactive UI."""
 
     def __init__(
         self,
@@ -482,24 +476,16 @@ class ChatSessionTurnStream:
         self._root_path = root_path
         self._config = config
         self._llm_client = llm_client
-        self._active_stream: ChatTurnStream | None = None
         self._lock = Lock()
         self._cancel_requested = False
 
     def cancel(self) -> None:
         with self._lock:
             self._cancel_requested = True
-            active_stream = self._active_stream
-        if active_stream is not None:
-            active_stream.cancel()
 
     def __iter__(
         self,
-    ) -> Iterator[
-        ChatWorkflowStatusEvent
-        | ChatWorkflowAssistantDeltaEvent
-        | ChatWorkflowResultEvent
-    ]:
+    ) -> Iterator[ChatWorkflowStatusEvent | ChatWorkflowResultEvent]:
         messages: list[ChatMessage] = [
             self._system_message,
             *self._prior_messages,
@@ -532,7 +518,7 @@ class ChatSessionTurnStream:
                 )
                 return
 
-            provider_stream = self._llm_client.stream_chat_turn(
+            response = self._llm_client.generate_chat_turn(
                 ChatTurnRequest(
                     messages=messages,
                     response_model=ChatFinalResponse,
@@ -541,50 +527,14 @@ class ChatSessionTurnStream:
                     temperature=self._config.llm.temperature,
                 )
             )
-            with self._lock:
-                self._active_stream = provider_stream
+            last_token_usage = response.token_usage
 
-            yielded_drafting_status = False
-            tool_call_event: ChatToolCallsEvent | None = None
-            final_response_event: ChatFinalResponseEvent | None = None
-            interrupted_event: ChatInterruptedEvent | None = None
-
-            for event in provider_stream:
-                if isinstance(event, ChatAssistantDeltaEvent):
-                    if not yielded_drafting_status:
-                        yielded_drafting_status = True
-                        yield ChatWorkflowStatusEvent(status="drafting answer")
-                    yield ChatWorkflowAssistantDeltaEvent(
-                        delta_text=event.delta_text,
-                        accumulated_text=event.accumulated_text,
-                    )
-                    continue
-
-                if isinstance(event, ChatToolCallsEvent):
-                    tool_call_event = event
-                    last_token_usage = event.token_usage
-                    break
-
-                if isinstance(event, ChatFinalResponseEvent):
-                    final_response_event = event
-                    last_token_usage = event.token_usage
-                    break
-
-                interrupted_event = event
-                last_token_usage = event.token_usage
-                break
-
-            with self._lock:
-                self._active_stream = None
-
-            if interrupted_event is not None:
-                new_messages.append(interrupted_event.assistant_message)
-                messages.append(interrupted_event.assistant_message)
+            if self._cancel_requested:
                 result = _build_interrupted_result(
                     new_messages=new_messages,
                     tool_results=tool_results,
                     token_usage=last_token_usage,
-                    reason=interrupted_event.reason,
+                    reason="Interrupted by user.",
                 )
                 yield ChatWorkflowResultEvent(
                     result=_finalize_session_turn_result(
@@ -597,12 +547,14 @@ class ChatSessionTurnStream:
                 )
                 return
 
-            if final_response_event is not None:
+            messages.append(response.assistant_message)
+            new_messages.append(response.assistant_message)
+
+            if response.finish_reason == "final_response":
+                yield ChatWorkflowStatusEvent(status="drafting answer")
                 final_response = ChatFinalResponse.model_validate(
-                    final_response_event.final_response
+                    response.final_response
                 )
-                new_messages.append(final_response_event.assistant_message)
-                messages.append(final_response_event.assistant_message)
                 result = ChatWorkflowTurnResult(
                     status="completed",
                     new_messages=new_messages,
@@ -621,16 +573,7 @@ class ChatSessionTurnStream:
                 )
                 return
 
-            if tool_call_event is None:
-                raise LLMError("Streaming chat turn ended without a terminal event")
-
-            messages.append(tool_call_event.assistant_message)
-            new_messages.append(tool_call_event.assistant_message)
-
-            if (
-                len(tool_call_event.tool_calls)
-                > self._config.session.max_tool_calls_per_round
-            ):
+            if len(response.tool_calls) > self._config.session.max_tool_calls_per_round:
                 result = _build_continuation_result(
                     new_messages=new_messages,
                     tool_results=tool_results,
@@ -653,7 +596,7 @@ class ChatSessionTurnStream:
                 return
 
             if (
-                executed_tool_call_count + len(tool_call_event.tool_calls)
+                executed_tool_call_count + len(response.tool_calls)
                 > self._config.session.max_total_tool_calls_per_turn
             ):
                 result = _build_continuation_result(
@@ -676,10 +619,44 @@ class ChatSessionTurnStream:
                 )
                 return
 
-            for tool_call in tool_call_event.tool_calls:
+            for tool_call in response.tool_calls:
+                if self._cancel_requested:
+                    result = _build_interrupted_result(
+                        new_messages=new_messages,
+                        tool_results=tool_results,
+                        token_usage=last_token_usage,
+                        reason="Interrupted by user.",
+                    )
+                    yield ChatWorkflowResultEvent(
+                        result=_finalize_session_turn_result(
+                            turn_result=result,
+                            session_state=self._session_state,
+                            active_context_start_turn=self._active_context_start_turn,
+                            context_warning=self._context_warning,
+                            system_message=self._system_message,
+                        )
+                    )
+                    return
                 yield ChatWorkflowStatusEvent(
                     status=_tool_status_label(tool_call.tool_name)
                 )
+                if self._cancel_requested:
+                    result = _build_interrupted_result(
+                        new_messages=new_messages,
+                        tool_results=tool_results,
+                        token_usage=last_token_usage,
+                        reason="Interrupted by user.",
+                    )
+                    yield ChatWorkflowResultEvent(
+                        result=_finalize_session_turn_result(
+                            turn_result=result,
+                            session_state=self._session_state,
+                            active_context_start_turn=self._active_context_start_turn,
+                            context_warning=self._context_warning,
+                            system_message=self._system_message,
+                        )
+                    )
+                    return
                 tool_result = _execute_tool_call(
                     tool_call,
                     root_path=self._root_path,
@@ -855,6 +832,25 @@ def run_chat_session_turn(
     )
 
 
+def run_interactive_chat_session_turn(
+    *,
+    user_message: str,
+    session_state: ChatSessionState,
+    root_path: Path,
+    config: ChatConfig,
+    llm_client: ChatLLMClient,
+) -> ChatSessionTurnRunner:
+    """Run one cancellable interactive chat turn while maintaining session state."""
+
+    return ChatSessionTurnRunner(
+        user_message=user_message,
+        session_state=session_state,
+        root_path=root_path,
+        config=config,
+        llm_client=llm_client,
+    )
+
+
 def run_streaming_chat_session_turn(
     *,
     user_message: str,
@@ -862,10 +858,10 @@ def run_streaming_chat_session_turn(
     root_path: Path,
     config: ChatConfig,
     llm_client: ChatLLMClient,
-) -> ChatSessionTurnStream:
-    """Run one streaming chat turn while maintaining in-memory session state."""
+) -> ChatSessionTurnRunner:
+    """Backward-compatible alias for the interactive turn runner."""
 
-    return ChatSessionTurnStream(
+    return run_interactive_chat_session_turn(
         user_message=user_message,
         session_state=session_state,
         root_path=root_path,

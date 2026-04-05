@@ -35,7 +35,6 @@ from engllm_chat.tools.chat.app import (
 )
 from engllm_chat.tools.chat.models import (
     ChatSessionState,
-    ChatWorkflowAssistantDeltaEvent,
     ChatWorkflowResultEvent,
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
@@ -121,12 +120,6 @@ def _install_completed_turn_stub(
     def _fake_run_turn_worker(user_message: str) -> None:
         screen._handle_turn_status(
             ChatWorkflowStatusEvent(status="thinking").model_dump(mode="json")
-        )
-        screen._handle_turn_delta(
-            ChatWorkflowAssistantDeltaEvent(
-                delta_text='{"answer":"Done"',
-                accumulated_text='{"answer":"Done"',
-            ).model_dump(mode="json")
         )
         screen._handle_turn_result(
             _result_event(
@@ -457,7 +450,7 @@ def test_chat_app_stop_action_visibility_and_busy_send_interrupt_modal(
             stop_button = screen.query_one("#stop-button", Button)
             assert stop_button.disabled is True
             screen._busy = True
-            screen._active_stream = _FakeCancelableStream()  # type: ignore[assignment]
+            screen._active_runner = _FakeCancelableStream()  # type: ignore[assignment]
             screen._refresh_footer()
             assert stop_button.disabled is False
             footer = _static_text(screen, "#footer-bar")
@@ -471,7 +464,7 @@ def test_chat_app_stop_action_visibility_and_busy_send_interrupt_modal(
             await pilot.pause()
             assert not isinstance(app.screen, InterruptConfirmModal)
             assert composer.text == "replacement draft"
-            assert screen._active_stream is not None
+            assert screen._active_runner is not None
             app.exit()
             await pilot.pause()
 
@@ -493,7 +486,7 @@ def test_chat_app_confirming_interrupt_cancels_and_restarts_with_new_draft(
             assert isinstance(screen, ChatScreen)
             fake_stream = _FakeCancelableStream()
             screen._busy = True
-            screen._active_stream = fake_stream  # type: ignore[assignment]
+            screen._active_runner = fake_stream  # type: ignore[assignment]
             screen._refresh_footer()
             restarted: list[str] = []
             screen._run_turn_worker = restarted.append  # type: ignore[method-assign]
@@ -534,12 +527,7 @@ def test_chat_app_interrupted_output_remains_visible_and_marked(
             await pilot.pause()
             screen = app.screen
             assert isinstance(screen, ChatScreen)
-            screen._handle_turn_delta(
-                ChatWorkflowAssistantDeltaEvent(
-                    delta_text='{"answer":"partial"',
-                    accumulated_text='{"answer":"partial"',
-                ).model_dump(mode="json")
-            )
+            screen._active_assistant_entry = screen._append_transcript("assistant", "")
             screen._handle_turn_result(
                 _result_event(
                     _interrupted_result(
@@ -666,7 +654,7 @@ def test_chat_app_handle_turn_error_resets_busy_state_and_focus(tmp_path: Path) 
             screen = app.screen
             assert isinstance(screen, ChatScreen)
             screen._busy = True
-            screen._active_stream = _FakeCancelableStream()  # type: ignore[assignment]
+            screen._active_runner = _FakeCancelableStream()  # type: ignore[assignment]
             screen._active_assistant_entry = screen._append_transcript(
                 "assistant",
                 "partial",
@@ -676,7 +664,7 @@ def test_chat_app_handle_turn_error_resets_busy_state_and_focus(tmp_path: Path) 
             transcript_texts = _transcript_texts(app)
             assert any("Error: boom" in text for text in transcript_texts)
             assert screen._busy is False
-            assert screen._active_stream is None
+            assert screen._active_runner is None
             assert screen._active_assistant_entry is None
             assert _static_text(screen, "#status-bar") == ""
             assert app.focused is screen.query_one("#composer", ComposerTextArea)
