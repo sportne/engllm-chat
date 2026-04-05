@@ -18,7 +18,7 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
   - Keep `OpenAICompatibleChatLLMClient` as the public entrypoint.
   - Preserve schema-first action handling, retry behavior, verbose logging, and Ollama normalization.
 
-- [ ] Split [`domain/models.py`](./src/engllm_chat/domain/models.py) into grouped internal modules
+- [x] Split [`domain/models.py`](./src/engllm_chat/domain/models.py) into grouped internal modules
   - Separate provider/config models.
   - Separate chat protocol/message models.
   - Separate response/citation/token usage models.
@@ -85,5 +85,6 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 - [x] Split deterministic chat tool listing logic into a moderate internal `_listing` package while keeping `listing.py` as the public facade.
 - [x] Split the chat workflow into internal helper modules while keeping `workflow.py` as the public facade.
 - [x] Split the OpenAI-compatible adapter into internal helper modules while keeping `openai_compatible.py` as the public facade.
+- [x] Split the domain model layer into grouped internal modules while keeping `domain/models.py` as the public facade.
 - [x] Added a repeatable chat smoke test with verbose LLM logging support.
 - [x] Generalized the smoke test path so it can target hosted providers such as Gemini.
