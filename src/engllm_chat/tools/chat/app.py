@@ -5,12 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from textual import events, on, work
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.message import Message
-from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, Input, Static, TextArea
+from textual.screen import Screen
+from textual.widgets import Button, Static
 
 from engllm_chat.domain.models import (
     ChatCitation,
@@ -20,175 +19,45 @@ from engllm_chat.domain.models import (
 )
 from engllm_chat.llm.base import ChatLLMClient
 from engllm_chat.llm.factory import create_chat_llm_client
+from engllm_chat.tools.chat.controller import ChatScreenController
 from engllm_chat.tools.chat.models import (
     ChatSessionState,
-    ChatWorkflowResultEvent,
     ChatWorkflowStatusEvent,
-    ChatWorkflowTurnResult,
+)
+from engllm_chat.tools.chat.presentation import (
+    TranscriptEntry,
+    format_citation,
+    format_final_response,
+)
+from engllm_chat.tools.chat.screens import (
+    ComposerTextArea,
+    CredentialModal,
+    InterruptConfirmModal,
 )
 from engllm_chat.tools.chat.workflow import (
     ChatSessionTurnRunner,
     run_interactive_chat_session_turn,
 )
 
+__all__ = [
+    "ChatApp",
+    "ChatScreen",
+    "ComposerTextArea",
+    "CredentialModal",
+    "InterruptConfirmModal",
+    "TranscriptEntry",
+    "_format_citation",
+    "_format_final_response",
+    "run_chat_app",
+]
+
 
 def _format_citation(citation: ChatCitation) -> str:
-    source_path = citation.source_path.as_posix()
-    if citation.line_start is None:
-        return source_path
-    if citation.line_end is None or citation.line_end == citation.line_start:
-        return f"{source_path}:{citation.line_start}"
-    return f"{source_path}:{citation.line_start}-{citation.line_end}"
+    return format_citation(citation)
 
 
 def _format_final_response(response: ChatFinalResponse) -> str:
-    sections = [response.answer]
-    if response.citations:
-        citations = "\n".join(
-            f"- {_format_citation(citation)}" for citation in response.citations
-        )
-        sections.append(f"Citations:\n{citations}")
-    if response.uncertainty:
-        uncertainty = "\n".join(f"- {item}" for item in response.uncertainty)
-        sections.append(f"Uncertainty:\n{uncertainty}")
-    if response.missing_information:
-        missing_information = "\n".join(
-            f"- {item}" for item in response.missing_information
-        )
-        sections.append(f"Missing Information:\n{missing_information}")
-    if response.follow_up_suggestions:
-        follow_ups = "\n".join(f"- {item}" for item in response.follow_up_suggestions)
-        sections.append(f"Follow-up Suggestions:\n{follow_ups}")
-    return "\n\n".join(sections)
-
-
-class TranscriptEntry(Static):
-    """One durable transcript row."""
-
-    def __init__(
-        self,
-        *,
-        role: str,
-        text: str,
-        assistant_completion_state: str = "complete",
-    ) -> None:
-        self.role = role
-        self._assistant_completion_state = assistant_completion_state
-        super().__init__(
-            self._format_text(role, text, assistant_completion_state),
-            classes=f"transcript-entry {role}",
-        )
-
-    def update_text(
-        self, text: str, *, assistant_completion_state: str | None = None
-    ) -> None:
-        if assistant_completion_state is not None:
-            self._assistant_completion_state = assistant_completion_state
-        self.update(
-            self._format_text(
-                self.role,
-                text,
-                self._assistant_completion_state,
-            )
-        )
-
-    @staticmethod
-    def _format_text(
-        role: str,
-        text: str,
-        assistant_completion_state: str,
-    ) -> str:
-        if role == "assistant":
-            if assistant_completion_state == "interrupted":
-                return f"Assistant (interrupted):\n{text}".rstrip()
-            return f"Assistant:\n{text}"
-        if role == "user":
-            return f"You:\n{text}"
-        if role == "error":
-            return f"Error: {text}"
-        return f"System:\n{text}"
-
-
-class CredentialModal(ModalScreen[str | None]):
-    """Startup modal for optional session-only credential entry."""
-
-    def __init__(self, metadata: ChatCredentialPromptMetadata) -> None:
-        super().__init__(id="credential-modal")
-        self._metadata = metadata
-
-    def compose(self) -> ComposeResult:
-        prompt_label = self._metadata.api_key_env_var or "API key"
-        with Vertical(id="credential-modal-body"):
-            yield Static(
-                f"Enter {prompt_label} for this session only, or leave it empty.",
-                id="credential-copy",
-            )
-            yield Input(
-                placeholder=prompt_label,
-                password=self._metadata.mask_input,
-                id="credential-input",
-            )
-            with Horizontal(id="credential-actions"):
-                yield Button("Continue", id="credential-submit", variant="primary")
-                yield Button("Cancel", id="credential-cancel")
-
-    @on(Button.Pressed, "#credential-submit")
-    def handle_submit(self) -> None:
-        value = self.query_one("#credential-input", Input).value
-        self.dismiss(value)
-
-    @on(Button.Pressed, "#credential-cancel")
-    def handle_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class InterruptConfirmModal(ModalScreen[bool]):
-    """Confirmation modal shown when the user sends while busy."""
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="interrupt-modal-body"):
-            yield Static(
-                "A chat turn is already running. Interrupt it and send "
-                "the current draft now?",
-                id="interrupt-copy",
-            )
-            with Horizontal(id="interrupt-actions"):
-                yield Button("Interrupt", id="interrupt-confirm", variant="warning")
-                yield Button("Cancel", id="interrupt-cancel")
-
-    @on(Button.Pressed, "#interrupt-confirm")
-    def handle_confirm(self) -> None:
-        self.dismiss(True)
-
-    @on(Button.Pressed, "#interrupt-cancel")
-    def handle_cancel(self) -> None:
-        self.dismiss(False)
-
-
-class ComposerTextArea(TextArea):
-    """Chat composer with explicit Enter/Shift+Enter behavior."""
-
-    class SubmitRequested(Message):
-        """Posted when the composer should submit the current draft."""
-
-        def __init__(self, composer: ComposerTextArea) -> None:
-            super().__init__()
-            self._composer = composer
-
-        @property
-        def control(self) -> ComposerTextArea:
-            return self._composer
-
-    def on_key(self, event: events.Key) -> None:
-        if event.key == "shift+enter":
-            event.stop()
-            event.prevent_default()
-            self.insert("\n")
-            return
-        if event.key == "enter":
-            event.stop()
-            event.prevent_default()
-            self.post_message(self.SubmitRequested(self))
+    return format_final_response(response)
 
 
 class ChatScreen(Screen[None]):
@@ -207,6 +76,7 @@ class ChatScreen(Screen[None]):
         self._config = config
         self._llm_client = llm_client
         self._credential_metadata_override = credential_metadata_override
+        self._create_chat_llm_client = create_chat_llm_client
         self._session_state = ChatSessionState()
         self._credential_secret: str | None = None
         self._busy = False
@@ -217,6 +87,7 @@ class ChatScreen(Screen[None]):
         self._footer_active_context_tokens: int | None = None
         self._footer_confidence: float | None = None
         self._reveal_generation = 0
+        self._controller = ChatScreenController(self)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-layout"):
@@ -251,53 +122,18 @@ class ChatScreen(Screen[None]):
         ):
             self.app.push_screen(
                 CredentialModal(metadata),
-                callback=self._handle_credential_submit,
+                callback=self._controller.handle_credential_submit,
             )
         elif self._llm_client is None:
-            self._initialize_llm_client()
-        self._refresh_footer()
+            self._controller.initialize_llm_client()
+        self._controller.refresh_footer()
         self.query_one("#composer", ComposerTextArea).focus()
 
     def _initialize_llm_client(self) -> bool:
-        if self._llm_client is not None:
-            return True
-        try:
-            self._llm_client = create_chat_llm_client(
-                self._config.llm,
-                provider=self._config.llm.provider,
-                model_name=self._config.llm.model_name,
-                api_base_url=self._config.llm.api_base_url,
-                timeout_seconds=self._config.llm.timeout_seconds,
-                api_key=self._credential_secret,
-            )
-        except Exception as exc:
-            self._append_transcript("error", str(exc))
-            self._set_status("")
-            return False
-        return True
+        return self._controller.initialize_llm_client()
 
     def _ensure_llm_client_ready(self) -> bool:
-        if self._llm_client is not None:
-            return True
-        metadata = (
-            self._credential_metadata_override
-            or self._config.llm.credential_prompt_metadata()
-        )
-        env_key_present = bool(
-            metadata.api_key_env_var and os.getenv(metadata.api_key_env_var)
-        )
-        if (
-            metadata.expects_api_key
-            and metadata.prompt_for_api_key_if_missing
-            and not env_key_present
-            and self._credential_secret is None
-        ):
-            self.app.push_screen(
-                CredentialModal(metadata),
-                callback=self._handle_credential_submit,
-            )
-            return False
-        return self._initialize_llm_client()
+        return self._controller.ensure_llm_client_ready()
 
     def _append_transcript(
         self,
@@ -306,44 +142,17 @@ class ChatScreen(Screen[None]):
         *,
         assistant_completion_state: str = "complete",
     ) -> TranscriptEntry:
-        transcript = self.query_one("#transcript", VerticalScroll)
-        entry = TranscriptEntry(
-            role=role,
-            text=text,
+        return self._controller.append_transcript(
+            role,
+            text,
             assistant_completion_state=assistant_completion_state,
         )
-        transcript.mount(entry)
-        transcript.scroll_end(animate=False)
-        return entry
 
     def _set_status(self, text: str) -> None:
-        self.query_one("#status-bar", Static).update(text)
+        self._controller.set_status(text)
 
     def _refresh_footer(self) -> None:
-        session_tokens = (
-            self._footer_session_tokens
-            if self._footer_session_tokens is not None
-            else "-"
-        )
-        active_context_tokens = (
-            self._footer_active_context_tokens
-            if self._footer_active_context_tokens is not None
-            else "-"
-        )
-        footer = (
-            "session tokens: "
-            f"{session_tokens}"
-            " | active context tokens: "
-            f"{active_context_tokens}"
-        )
-        if self._footer_confidence is not None:
-            footer += f" | confidence: {self._footer_confidence:.2f}"
-        if self._busy:
-            footer += " | Enter send | Shift+Enter newline | Stop active turn"
-        else:
-            footer += " | Enter send | Shift+Enter newline | /help | quit"
-        self.query_one("#footer-bar", Static).update(footer)
-        self.query_one("#stop-button", Button).disabled = not self._busy
+        self._controller.refresh_footer()
 
     def _update_footer_metrics(
         self,
@@ -352,172 +161,41 @@ class ChatScreen(Screen[None]):
         active_context_tokens: int | None,
         confidence: float | None,
     ) -> None:
-        self._footer_session_tokens = session_tokens
-        self._footer_active_context_tokens = active_context_tokens
-        self._footer_confidence = confidence
-        self._refresh_footer()
+        self._controller.update_footer_metrics(
+            session_tokens=session_tokens,
+            active_context_tokens=active_context_tokens,
+            confidence=confidence,
+        )
 
     def _clear_composer(self) -> None:
-        self.query_one("#composer", ComposerTextArea).load_text("")
+        self._controller.clear_composer()
 
     def _handle_credential_submit(self, secret_value: str | None) -> None:
-        self._credential_secret = secret_value or None
-        self._initialize_llm_client()
-        self.query_one("#composer", ComposerTextArea).focus()
+        self._controller.handle_credential_submit(secret_value)
 
     def _handle_interrupt_confirmation(self, confirmed: bool | None) -> None:
-        if confirmed:
-            pending_draft = self.query_one("#composer", ComposerTextArea).text
-            self._pending_interrupt_draft = (
-                pending_draft if pending_draft.strip() else None
-            )
-            self._cancel_active_turn(status_text="stopping")
-        self.query_one("#composer", ComposerTextArea).focus()
+        self._controller.handle_interrupt_confirmation(confirmed)
 
     def _handle_turn_error(self, error_message: str) -> None:
-        self._append_transcript("error", error_message)
-        self._set_status("")
-        self._busy = False
-        self._active_runner = None
-        self._active_assistant_entry = None
-        self._refresh_footer()
-        self.query_one("#composer", ComposerTextArea).focus()
+        self._controller.handle_turn_error(error_message)
 
     def _handle_turn_status(self, event: object) -> None:
-        typed_event = ChatWorkflowStatusEvent.model_validate(event)
-        self._set_status(typed_event.status)
+        self._controller.handle_turn_status(event)
 
     def _start_assistant_reveal(self, text: str) -> None:
-        self._reveal_generation += 1
-        generation = self._reveal_generation
-        if self._active_assistant_entry is None:
-            self._active_assistant_entry = self._append_transcript("assistant", "")
-        else:
-            self._active_assistant_entry.update_text(
-                "", assistant_completion_state="complete"
-            )
-
-        chunk_size = max(1, len(text) // 24) if text else 1
-
-        def _step(index: int) -> None:
-            if generation != self._reveal_generation:
-                return
-            next_index = min(len(text), index + chunk_size)
-            if self._active_assistant_entry is not None:
-                self._active_assistant_entry.update_text(
-                    text[:next_index],
-                    assistant_completion_state="complete",
-                )
-            if next_index < len(text):
-                self.set_timer(0.01, lambda: _step(next_index))
-
-        _step(0)
+        self._controller.start_assistant_reveal(text)
 
     def _handle_turn_result(self, event: object) -> None:
-        typed_event = ChatWorkflowResultEvent.model_validate(event)
-        result = typed_event.result
-        typed_result = ChatWorkflowTurnResult.model_validate(result)
-        self._session_state = typed_result.session_state or self._session_state
-        if typed_result.context_warning:
-            self._append_transcript("system", typed_result.context_warning)
-        if (
-            typed_result.status == "needs_continuation"
-            and typed_result.continuation_reason
-        ):
-            self._append_transcript("system", typed_result.continuation_reason)
-        if typed_result.final_response is not None:
-            self._start_assistant_reveal(
-                _format_final_response(typed_result.final_response)
-            )
-        elif typed_result.status == "interrupted":
-            interrupted_message = next(
-                (
-                    message
-                    for message in reversed(typed_result.new_messages)
-                    if message.role == "assistant"
-                    and message.completion_state == "interrupted"
-                ),
-                None,
-            )
-            if interrupted_message is not None and interrupted_message.content:
-                if self._active_assistant_entry is None:
-                    self._active_assistant_entry = self._append_transcript(
-                        "assistant",
-                        interrupted_message.content,
-                        assistant_completion_state="interrupted",
-                    )
-                else:
-                    self._active_assistant_entry.update_text(
-                        interrupted_message.content,
-                        assistant_completion_state="interrupted",
-                    )
-        self._update_footer_metrics(
-            session_tokens=(
-                typed_result.token_usage.session_tokens
-                if typed_result.token_usage
-                else None
-            ),
-            active_context_tokens=(
-                typed_result.token_usage.active_context_tokens
-                if typed_result.token_usage
-                else None
-            ),
-            confidence=(
-                typed_result.final_response.confidence
-                if typed_result.final_response
-                else None
-            ),
-        )
-        self._set_status("")
-        self._busy = False
-        self._active_runner = None
-        pending_draft = self._pending_interrupt_draft
-        self._pending_interrupt_draft = None
-        self._refresh_footer()
-        self.query_one("#composer", ComposerTextArea).focus()
-        if pending_draft is not None:
-            self._submit_draft(pending_draft)
+        self._controller.handle_turn_result(event)
 
     def _handle_inline_command(self, user_message: str) -> bool:
-        normalized = user_message.strip().lower()
-        if normalized == "/help":
-            self._append_transcript(
-                "system",
-                "Ask grounded questions about the selected root. "
-                "Use quit or exit to leave.",
-            )
-            return True
-        if normalized in {"quit", "exit"}:
-            self.app.exit()
-            return True
-        return False
+        return self._controller.handle_inline_command(user_message)
 
     def _cancel_active_turn(self, *, status_text: str) -> None:
-        if self._active_runner is None:
-            return
-        self._set_status(status_text)
-        self._active_runner.cancel()
+        self._controller.cancel_active_turn(status_text=status_text)
 
     def _submit_draft(self, raw_draft: str) -> None:
-        if not raw_draft.strip():
-            return
-        if self._busy:
-            self.app.push_screen(
-                InterruptConfirmModal(),
-                callback=self._handle_interrupt_confirmation,
-            )
-            return
-        if not self._ensure_llm_client_ready():
-            return
-        self._clear_composer()
-        if self._handle_inline_command(raw_draft):
-            return
-        self._reveal_generation += 1
-        self._append_transcript("user", raw_draft)
-        self._active_assistant_entry = None
-        self._busy = True
-        self._refresh_footer()
-        self._run_turn_worker(raw_draft)
+        self._controller.submit_draft(raw_draft)
 
     @on(ComposerTextArea.SubmitRequested, "#composer")
     def handle_composer_submit(self) -> None:
