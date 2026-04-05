@@ -18,14 +18,16 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 
 - [x] Tighten the probe utility output so it distinguishes required runtime APIs from optional or extra OpenAI-compatible capabilities.
 
-- [ ] Continue improving prompt/tool-selection behavior so models prefer source-code evidence over docs-heavy evidence for implementation questions.
+- [ ] Preserve question-driven evidence selection
+  - Prefer evidence sources based on the user's question and the repository contents.
+  - Do not introduce a blanket preference for code over docs, config, data files, or other repository artifacts.
 
 - [ ] Decide later whether smoke/probe should stay as packaged modules or become script-first utilities
   - `scripts/chat_smoke.py`, `scripts/ollama_chat_smoke.py`, and `scripts/openai_api_probe.py` already provide script entrypoints.
   - Keep the current packaged implementations under `src/engllm_chat/` for now because tests import them directly, the CLI imports `probe_openai_api`, and docs/Make targets already point at the packaged module path.
   - If we revisit this later, do it as a separate packaging and entrypoint cleanup rather than as part of the modularity roadmap.
 
-- [ ] Do integrated end-to-end testing of the Textual chat client and user experience
+- [x] Do integrated end-to-end testing of the Textual chat client and user experience
   - Exercise the actual Textual app with the full workflow, provider layer, prompts, and deterministic tools wired together.
   - Test real chat sessions against local and hosted providers where practical, not just isolated workflow helpers.
   - Review the overall UX for responsiveness, interruptions, status messaging, transcript readability, and error recovery.
@@ -63,3 +65,5 @@ This file tracks the main follow-up work for `engllm-chat` after the recent modu
 - [x] Generalized the smoke test path so it can target hosted providers such as Gemini.
 - [x] Completed the contributor-reference and teaching-oriented documentation pass.
 - [x] Tightened the probe utility output around `engllm-chat` runtime requirements.
+- [x] Removed the software-specific code-bias prompt idea and replaced it with a question-driven evidence-selection principle.
+- [x] Added stronger integrated Textual chat-client coverage for startup, busy-state, continuation, interruption, and recovery flows.

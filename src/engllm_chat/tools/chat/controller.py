@@ -155,6 +155,7 @@ class ChatScreenController:
         self._screen._busy = False
         self._screen._active_runner = None
         self._screen._active_assistant_entry = None
+        self._screen._pending_interrupt_draft = None
         self.refresh_footer()
         self._screen.query_one("#composer", ComposerTextArea).focus()
 

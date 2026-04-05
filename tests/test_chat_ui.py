@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,26 @@ class _FakeCancelableStream:
 
     def cancel(self) -> None:
         self.cancelled = True
+
+
+class _GatedTurnStream:
+    def __init__(
+        self,
+        *,
+        result: ChatWorkflowTurnResult,
+        gate: threading.Event | None = None,
+        statuses: tuple[str, ...] = ("thinking",),
+    ) -> None:
+        self._result = result
+        self._gate = gate
+        self._statuses = statuses
+
+    def __iter__(self):
+        for status in self._statuses:
+            yield ChatWorkflowStatusEvent(status=status)
+        if self._gate is not None:
+            self._gate.wait(timeout=1.0)
+        yield ChatWorkflowResultEvent(result=self._result)
 
 
 def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
@@ -726,6 +747,238 @@ def test_chat_app_completed_answer_renders_labeled_sections(tmp_path: Path) -> N
             assert "Uncertainty:\n- Unsure" in assistant_text
             assert "Missing Information:\n- Missing" in assistant_text
             assert "Follow-up Suggestions:\n- Next" in assistant_text
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_worker_path_updates_busy_state_and_completes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    gate = threading.Event()
+
+    def _fake_run_interactive_chat_session_turn(**kwargs):
+        assert kwargs["user_message"] == "What is here?"
+        return _GatedTurnStream(
+            result=_completed_result(user_message="What is here?"),
+            gate=gate,
+        )
+
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.app.run_interactive_chat_session_turn",
+        _fake_run_interactive_chat_session_turn,
+    )
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            composer = screen.query_one("#composer", ComposerTextArea)
+            composer.load_text("What is here?")
+            await pilot.click("#send-button")
+
+            for _ in range(50):
+                await pilot.pause()
+                if _static_text(screen, "#status-bar") == "thinking":
+                    break
+
+            stop_button = screen.query_one("#stop-button", Button)
+            assert screen._busy is True
+            assert stop_button.disabled is False
+            assert _static_text(screen, "#status-bar") == "thinking"
+            assert "Stop active turn" in _static_text(screen, "#footer-bar")
+            assert any("You:\nWhat is here?" in text for text in _transcript_texts(app))
+
+            gate.set()
+            for _ in range(50):
+                await pilot.pause()
+                transcript_texts = _transcript_texts(app)
+                if not screen._busy and any(
+                    "Assistant:\nDone" in text for text in transcript_texts
+                ):
+                    break
+
+            transcript_texts = _transcript_texts(app)
+            assert screen._busy is False
+            assert stop_button.disabled is True
+            assert _static_text(screen, "#status-bar") == ""
+            assert any("Assistant:\nDone" in text for text in transcript_texts)
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_worker_path_handles_continuation_and_allows_follow_up_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    call_messages: list[str] = []
+
+    def _fake_run_interactive_chat_session_turn(**kwargs):
+        user_message = kwargs["user_message"]
+        call_messages.append(user_message)
+        if len(call_messages) == 1:
+            return _GatedTurnStream(
+                result=ChatWorkflowTurnResult(
+                    status="needs_continuation",
+                    continuation_reason="Need more tool budget.",
+                    new_messages=[ChatMessage(role="user", content=user_message)],
+                    session_state=ChatSessionState(),
+                )
+            )
+        return _GatedTurnStream(
+            result=_completed_result(
+                user_message=user_message,
+                answer="Follow-up complete",
+                confidence=0.8,
+            )
+        )
+
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.app.run_interactive_chat_session_turn",
+        _fake_run_interactive_chat_session_turn,
+    )
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            composer = screen.query_one("#composer", ComposerTextArea)
+            composer.load_text("first question")
+            await pilot.click("#send-button")
+            for _ in range(50):
+                await pilot.pause()
+                if not screen._busy:
+                    break
+
+            transcript_texts = _transcript_texts(app)
+            assert any("Need more tool budget." in text for text in transcript_texts)
+            assert screen._busy is False
+            assert _static_text(screen, "#status-bar") == ""
+            await screen.workers.wait_for_complete()
+
+            restarted: list[str] = []
+            screen._run_turn_worker = restarted.append  # type: ignore[method-assign]
+            screen._submit_draft("second question")
+            await pilot.pause()
+            assert restarted == ["second question"]
+
+            screen._handle_turn_result(
+                _result_event(
+                    _completed_result(
+                        user_message="second question",
+                        answer="Follow-up complete",
+                        confidence=0.8,
+                    )
+                )
+            )
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert call_messages == ["first question"]
+            assert any("You:\nfirst question" in text for text in transcript_texts)
+            assert any("You:\nsecond question" in text for text in transcript_texts)
+            assert any(
+                "Assistant:\nFollow-up complete" in text for text in transcript_texts
+            )
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_worker_path_recovers_from_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    call_messages: list[str] = []
+
+    def _fake_run_interactive_chat_session_turn(**kwargs):
+        user_message = kwargs["user_message"]
+        call_messages.append(user_message)
+        if len(call_messages) == 1:
+            raise LLMError("boom")
+        return _GatedTurnStream(
+            result=_completed_result(
+                user_message=user_message,
+                answer="Recovered",
+                confidence=0.9,
+            )
+        )
+
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.app.run_interactive_chat_session_turn",
+        _fake_run_interactive_chat_session_turn,
+    )
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            composer = screen.query_one("#composer", ComposerTextArea)
+            composer.load_text("first try")
+            await pilot.click("#send-button")
+            for _ in range(50):
+                await pilot.pause()
+                transcript_texts = _transcript_texts(app)
+                if not screen._busy and any(
+                    "Error: boom" in text for text in transcript_texts
+                ):
+                    break
+
+            transcript_texts = _transcript_texts(app)
+            assert any("Error: boom" in text for text in transcript_texts)
+            assert screen._busy is False
+            assert screen._active_runner is None
+            assert screen._pending_interrupt_draft is None
+            assert screen.query_one("#stop-button", Button).disabled is True
+            await screen.workers.wait_for_complete()
+
+            restarted: list[str] = []
+            screen._run_turn_worker = restarted.append  # type: ignore[method-assign]
+            screen._submit_draft("second try")
+            await pilot.pause()
+            assert restarted == ["second try"]
+
+            screen._handle_turn_result(
+                _result_event(
+                    _completed_result(
+                        user_message="second try",
+                        answer="Recovered",
+                        confidence=0.9,
+                    )
+                )
+            )
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert call_messages == ["first try"]
+            assert any("Assistant:\nRecovered" in text for text in transcript_texts)
+            assert app.focused is screen.query_one("#composer", ComposerTextArea)
             app.exit()
             await pilot.pause()
 
