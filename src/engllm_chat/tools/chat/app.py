@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from textual import events, on, work
@@ -18,6 +19,7 @@ from engllm_chat.domain.models import (
     ChatFinalResponse,
 )
 from engllm_chat.llm.base import ChatLLMClient
+from engllm_chat.llm.factory import create_chat_llm_client
 from engllm_chat.tools.chat.models import (
     ChatSessionState,
     ChatWorkflowAssistantDeltaEvent,
@@ -198,7 +200,7 @@ class ChatScreen(Screen[None]):
         *,
         root_path: Path,
         config: ChatConfig,
-        llm_client: ChatLLMClient,
+        llm_client: ChatLLMClient | None,
         credential_metadata_override: ChatCredentialPromptMetadata | None = None,
     ) -> None:
         super().__init__(id="chat-screen")
@@ -238,13 +240,65 @@ class ChatScreen(Screen[None]):
             self._credential_metadata_override
             or self._config.llm.credential_prompt_metadata()
         )
-        if metadata.expects_api_key and metadata.prompt_for_api_key_if_missing:
+        env_key_present = bool(
+            metadata.api_key_env_var and os.getenv(metadata.api_key_env_var)
+        )
+        if (
+            self._llm_client is None
+            and metadata.expects_api_key
+            and metadata.prompt_for_api_key_if_missing
+            and not env_key_present
+        ):
             self.app.push_screen(
                 CredentialModal(metadata),
                 callback=self._handle_credential_submit,
             )
+        elif self._llm_client is None:
+            self._initialize_llm_client()
         self._refresh_footer()
         self.query_one("#composer", ComposerTextArea).focus()
+
+    def _initialize_llm_client(self) -> bool:
+        if self._llm_client is not None:
+            return True
+        try:
+            self._llm_client = create_chat_llm_client(
+                self._config.llm,
+                provider=self._config.llm.provider,
+                model_name=self._config.llm.model_name,
+                ollama_base_url=self._config.llm.ollama_base_url,
+                api_base_url=self._config.llm.api_base_url,
+                timeout_seconds=self._config.llm.timeout_seconds,
+                api_key=self._credential_secret,
+            )
+        except Exception as exc:
+            self._append_transcript("error", str(exc))
+            self._set_status("")
+            return False
+        return True
+
+    def _ensure_llm_client_ready(self) -> bool:
+        if self._llm_client is not None:
+            return True
+        metadata = (
+            self._credential_metadata_override
+            or self._config.llm.credential_prompt_metadata()
+        )
+        env_key_present = bool(
+            metadata.api_key_env_var and os.getenv(metadata.api_key_env_var)
+        )
+        if (
+            metadata.expects_api_key
+            and metadata.prompt_for_api_key_if_missing
+            and not env_key_present
+            and self._credential_secret is None
+        ):
+            self.app.push_screen(
+                CredentialModal(metadata),
+                callback=self._handle_credential_submit,
+            )
+            return False
+        return self._initialize_llm_client()
 
     def _append_transcript(
         self,
@@ -308,7 +362,8 @@ class ChatScreen(Screen[None]):
         self.query_one("#composer", ComposerTextArea).load_text("")
 
     def _handle_credential_submit(self, secret_value: str | None) -> None:
-        self._credential_secret = secret_value
+        self._credential_secret = secret_value or None
+        self._initialize_llm_client()
         self.query_one("#composer", ComposerTextArea).focus()
 
     def _handle_interrupt_confirmation(self, confirmed: bool | None) -> None:
@@ -446,6 +501,8 @@ class ChatScreen(Screen[None]):
                 callback=self._handle_interrupt_confirmation,
             )
             return
+        if not self._ensure_llm_client_ready():
+            return
         self._clear_composer()
         if self._handle_inline_command(raw_draft):
             return
@@ -475,12 +532,15 @@ class ChatScreen(Screen[None]):
     @work(thread=True, exclusive=True)
     def _run_turn_worker(self, user_message: str) -> None:
         try:
+            llm_client = self._llm_client
+            if llm_client is None:
+                raise RuntimeError("Chat client is not configured.")
             turn_stream = run_streaming_chat_session_turn(
                 user_message=user_message,
                 session_state=self._session_state,
                 root_path=self._root_path,
                 config=self._config,
-                llm_client=self._llm_client,
+                llm_client=llm_client,
             )
             self._active_stream = turn_stream
             for event in turn_stream:
@@ -514,7 +574,7 @@ class ChatApp(App[None]):
         *,
         root_path: Path,
         config: ChatConfig,
-        llm_client: ChatLLMClient,
+        llm_client: ChatLLMClient | None,
         credential_metadata_override: ChatCredentialPromptMetadata | None = None,
     ) -> None:
         super().__init__()
@@ -538,7 +598,7 @@ def run_chat_app(
     *,
     root_path: Path,
     config: ChatConfig,
-    llm_client: ChatLLMClient,
+    llm_client: ChatLLMClient | None = None,
 ) -> int:
     """Launch the first Textual chat app shell."""
 

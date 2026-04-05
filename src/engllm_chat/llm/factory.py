@@ -6,8 +6,10 @@ from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import ChatLLMConfig, ChatProvider
 from engllm_chat.llm.base import ChatLLMClient
 from engllm_chat.llm.mock import MockLLMClient
-from engllm_chat.llm.ollama import OllamaLLMClient
-from engllm_chat.llm.openai_compatible import OpenAICompatibleChatLLMClient
+from engllm_chat.llm.openai_compatible import (
+    OpenAICompatibleChatLLMClient,
+    normalize_ollama_base_url,
+)
 
 
 def create_chat_llm_client(
@@ -17,6 +19,7 @@ def create_chat_llm_client(
     ollama_base_url: str | None = None,
     api_base_url: str | None = None,
     timeout_seconds: float | None = None,
+    api_key: str | None = None,
 ) -> ChatLLMClient:
     """Create a chat-capable provider client from chat config and overrides."""
 
@@ -29,10 +32,13 @@ def create_chat_llm_client(
 
     if resolved_provider == "ollama":
         resolved_base_url = ollama_base_url or config.ollama_base_url
-        return OllamaLLMClient(
+        return OpenAICompatibleChatLLMClient(
             model_name=resolved_model,
-            base_url=resolved_base_url,
+            provider_name="ollama",
+            api_key_env_var=None,
+            base_url=normalize_ollama_base_url(resolved_base_url),
             timeout_seconds=resolved_timeout,
+            api_key=api_key,
         )
 
     if resolved_provider in {"openai", "xai", "anthropic", "gemini"}:
@@ -43,6 +49,7 @@ def create_chat_llm_client(
             api_key_env_var=config.resolved_api_key_env_var(),
             base_url=resolved_api_base_url,
             timeout_seconds=resolved_timeout,
+            api_key=api_key,
         )
 
     raise LLMError(f"Unsupported chat LLM provider '{resolved_provider}'")

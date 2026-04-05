@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import pytest
 from pydantic import BaseModel
 
@@ -29,44 +26,15 @@ from engllm_chat.llm.base import (
 )
 from engllm_chat.llm.factory import create_chat_llm_client
 from engllm_chat.llm.mock import MockLLMClient
-from engllm_chat.llm.ollama import OllamaLLMClient
-from engllm_chat.llm.openai_compatible import OpenAICompatibleChatLLMClient
+from engllm_chat.llm.openai_compatible import (
+    OpenAICompatibleChatLLMClient,
+    normalize_ollama_base_url,
+)
 from engllm_chat.probe_openai_api import main as probe_main
 
 
 class _SimpleModel(BaseModel):
     value: int
-
-
-class _FakeResponse:
-    def __init__(
-        self,
-        *,
-        status: int = 200,
-        body: str = "",
-        lines: list[str] | None = None,
-    ) -> None:
-        self.status = status
-        self._body = body
-        self._lines = [line.encode("utf-8") for line in (lines or [])]
-        self.closed = False
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.close()
-
-    def read(self) -> bytes:
-        return self._body.encode("utf-8")
-
-    def readline(self) -> bytes:
-        if not self._lines:
-            return b""
-        return self._lines.pop(0)
-
-    def close(self) -> None:
-        self.closed = True
 
 
 class _FakeFunction:
@@ -323,17 +291,28 @@ def test_mock_stream_cancel_yields_interrupted_event() -> None:
 
 
 def test_create_chat_llm_client_supports_mock_and_ollama() -> None:
+    _FakeOpenAIClient.reset()
     config = ChatLLMConfig(provider="mock", model_name="mock-chat")
     assert isinstance(create_chat_llm_client(config), MockLLMClient)
 
-    ollama_client = create_chat_llm_client(
-        ChatLLMConfig(provider="ollama", model_name="qwen"),
-        provider="ollama",
-        model_name="qwen3",
-        ollama_base_url="http://localhost:11434",
-        timeout_seconds=12.0,
-    )
-    assert isinstance(ollama_client, OllamaLLMClient)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "engllm_chat.llm.openai_compatible.OpenAI",
+            _FakeOpenAIClient,
+        )
+        ollama_client = create_chat_llm_client(
+            ChatLLMConfig(provider="ollama", model_name="qwen"),
+            provider="ollama",
+            model_name="qwen3",
+            ollama_base_url="http://localhost:11434",
+            timeout_seconds=12.0,
+        )
+        assert isinstance(ollama_client, OpenAICompatibleChatLLMClient)
+        assert _FakeOpenAIClient.last_init_kwargs == {
+            "api_key": "ollama",
+            "base_url": "http://localhost:11434/v1",
+            "timeout": 12.0,
+        }
 
     with pytest.raises(LLMError, match="Unsupported chat LLM provider"):
         create_chat_llm_client(config, provider="bad-provider")  # type: ignore[arg-type]
@@ -442,6 +421,13 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
     assert response.token_usage is not None
     assert response.token_usage.total_tokens == 8
     assert _FakeOpenAIClient.captured_payloads[-1]["model"] == "gpt-test"
+    assert _FakeOpenAIClient.captured_payloads[-1]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "chatfinalresponse",
+            "schema": ChatFinalResponse.model_json_schema(),
+        },
+    }
 
 
 def test_openai_compatible_generate_chat_turn_parses_tool_calls(
@@ -556,6 +542,13 @@ def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel
     assert isinstance(final_events[0], ChatAssistantDeltaEvent)
     assert isinstance(final_events[-1], ChatFinalResponseEvent)
     assert final_events[-1].final_response == ChatFinalResponse(answer="Hello world")
+    assert _FakeOpenAIClient.captured_payloads[0]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "chatfinalresponse",
+            "schema": ChatFinalResponse.model_json_schema(),
+        },
+    }
 
     tool_events = list(
         client.stream_chat_turn(
@@ -584,19 +577,21 @@ def test_openai_compatible_stream_chat_turn_supports_final_tool_calls_and_cancel
 
 
 def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
-    payload = {
-        "message": {"content": '{"answer":"Done","citations":[]}'},
-        "prompt_eval_count": 4,
-        "eval_count": 6,
-    }
-
-    def _fake_urlopen(request_obj: Any, timeout: float) -> _FakeResponse:
-        assert timeout == 60.0
-        assert request_obj.full_url.endswith("/api/chat")
-        return _FakeResponse(body=json.dumps(payload))
-
-    monkeypatch.setattr("engllm_chat.llm.ollama.request_lib.urlopen", _fake_urlopen)
-    client = OllamaLLMClient(model_name="qwen", base_url="http://localhost:11434")
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_responses = [
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(content='{"answer":"Done","citations":[]}'),
+            usage=_FakeUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10),
+        )
+    ]
+    client = OpenAICompatibleChatLLMClient(
+        model_name="qwen",
+        provider_name="ollama",
+        api_key_env_var=None,
+        api_key="ollama",
+        base_url=normalize_ollama_base_url("http://localhost:11434"),
+    )
     response = client.generate_chat_turn(
         ChatTurnRequest(
             messages=[ChatMessage(role="user", content="hello")],
@@ -609,24 +604,29 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
     assert response.final_response == ChatFinalResponse(answer="Done")
     assert response.token_usage is not None
     assert response.token_usage.total_tokens == 10
+    assert _FakeOpenAIClient.last_init_kwargs is not None
+    assert _FakeOpenAIClient.last_init_kwargs["base_url"] == "http://localhost:11434/v1"
+    assert _FakeOpenAIClient.last_init_kwargs["api_key"] == "ollama"
 
 
 def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
-    payload = {
-        "message": {
-            "content": "",
-            "tool_calls": [
-                {"function": {"name": "list_directory", "arguments": {"path": "."}}}
-            ],
-        }
-    }
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _FakeResponse(body=json.dumps(payload)),
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_responses = [
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content="",
+                tool_calls=[_FakeToolCall("call-1", "list_directory", '{"path":"."}')],
+            )
+        )
+    ]
+    client = OpenAICompatibleChatLLMClient(
+        model_name="qwen",
+        provider_name="ollama",
+        api_key_env_var=None,
+        api_key="ollama",
+        base_url=normalize_ollama_base_url(None),
     )
-
-    client = OllamaLLMClient(model_name="qwen")
     response = client.generate_chat_turn(
         ChatTurnRequest(
             messages=[ChatMessage(role="user", content="hello")],
@@ -640,23 +640,31 @@ def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
 
 
 def test_ollama_stream_chat_turn_supports_final_and_cancel(monkeypatch) -> None:
-    lines = [
-        json.dumps({"message": {"content": '{"answer":"Hi"'}, "done": False}),
-        json.dumps(
-            {
-                "message": {"content": "}", "tool_calls": []},
-                "done": True,
-                "prompt_eval_count": 1,
-                "eval_count": 2,
-            }
-        ),
-    ]
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _FakeResponse(lines=lines),
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    final_stream = _FakeStreamingResponse(
+        [
+            _FakeStreamingChunk(delta=_FakeDelta(content='{"answer":"Hi"')),
+            _FakeStreamingChunk(
+                delta=_FakeDelta(content="}"),
+                finish_reason="stop",
+                usage=_FakeUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            ),
+        ]
     )
-
-    client = OllamaLLMClient(model_name="qwen")
+    cancel_stream = _FakeStreamingResponse(
+        [
+            _FakeStreamingChunk(delta=_FakeDelta(content="partial")),
+        ]
+    )
+    _FakeOpenAIClient.queued_responses = [final_stream, cancel_stream]
+    client = OpenAICompatibleChatLLMClient(
+        model_name="qwen",
+        provider_name="ollama",
+        api_key_env_var=None,
+        api_key="ollama",
+        base_url=normalize_ollama_base_url(None),
+    )
     stream = client.stream_chat_turn(
         ChatTurnRequest(
             messages=[ChatMessage(role="user", content="hello")],
@@ -668,13 +676,6 @@ def test_ollama_stream_chat_turn_supports_final_and_cancel(monkeypatch) -> None:
     assert events[0].event_type == "assistant_delta"
     assert events[-1].event_type == "final_response"
 
-    response = _FakeResponse(
-        lines=[json.dumps({"message": {"content": "partial"}, "done": False})]
-    )
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: response,
-    )
     cancel_stream = client.stream_chat_turn(
         ChatTurnRequest(
             messages=[ChatMessage(role="user", content="hello")],
@@ -685,7 +686,7 @@ def test_ollama_stream_chat_turn_supports_final_and_cancel(monkeypatch) -> None:
     cancel_stream.cancel()
     cancel_events = list(cancel_stream)
     assert cancel_events[-1].event_type == "interrupted"
-    assert response.closed is True
+    assert _FakeOpenAIClient.last_init_kwargs is not None
 
 
 def test_probe_main_requires_api_key(capsys: pytest.CaptureFixture[str]) -> None:

@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import threading
+import urllib.parse
 from collections.abc import Iterator
 from typing import Any, Protocol
+
+from pydantic import BaseModel
 
 from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import ChatMessage, ChatTokenUsage, ChatToolCall
@@ -31,6 +34,39 @@ except Exception:  # pragma: no cover - optional dependency
     pass
 
 OpenAI: Any = _openai_sdk
+
+
+def normalize_ollama_base_url(base_url: str | None) -> str:
+    """Normalize an Ollama host/base URL to its OpenAI-compatible `/v1` form."""
+
+    default_base_url = "http://127.0.0.1:11434"
+    raw = (base_url or default_base_url).strip() or default_base_url
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    parsed = urllib.parse.urlparse(raw)
+    path = parsed.path.rstrip("/")
+
+    if not path:
+        normalized_path = "/v1"
+    elif path == "/v1" or path.endswith("/v1"):
+        normalized_path = path
+    else:
+        normalized_path = f"{path}/v1"
+
+    normalized = parsed._replace(path=normalized_path, params="", query="", fragment="")
+    return urllib.parse.urlunparse(normalized)
+
+
+def _build_response_format(response_model: type[BaseModel]) -> dict[str, object]:
+    schema_name = response_model.__name__.lower()
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "schema": response_model.model_json_schema(),
+        },
+    }
 
 
 def _serialize_chat_message(message: ChatMessage) -> dict[str, object]:
@@ -387,6 +423,8 @@ class OpenAICompatibleChatLLMClient:
             )
 
         api_token = api_key or (os.getenv(api_key_env_var) if api_key_env_var else None)
+        if provider_name == "ollama" and not api_token:
+            api_token = "ollama"
         if not api_token:
             env_name = api_key_env_var or "API key"
             raise LLMError(f"{env_name} is not configured")
@@ -408,6 +446,7 @@ class OpenAICompatibleChatLLMClient:
                 _serialize_chat_message(message) for message in request.messages
             ],
             "temperature": request.temperature,
+            "response_format": _build_response_format(request.response_model),
         }
         if request.tools:
             payload["tools"] = [
@@ -467,6 +506,7 @@ class OpenAICompatibleChatLLMClient:
             "temperature": request.temperature,
             "stream": True,
             "stream_options": {"include_usage": True},
+            "response_format": _build_response_format(request.response_model),
         }
         if request.tools:
             payload["tools"] = [

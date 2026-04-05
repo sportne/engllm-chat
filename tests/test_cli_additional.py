@@ -31,20 +31,12 @@ def test_interactive_cli_launches_app_with_overrides(
         cli_module, "load_chat_config", lambda _path: _fake_chat_config()
     )
 
-    def _fake_create_chat_llm_client(config, **kwargs):
-        captured["llm_config"] = config
-        captured["llm_kwargs"] = kwargs
-        return object()
-
-    def _fake_launch_chat_app(*, root_path, config, llm_client):
+    def _fake_launch_chat_app(*, root_path, config, llm_client=None):
         captured["root_path"] = root_path
         captured["config"] = config
         captured["llm_client"] = llm_client
         return 0
 
-    monkeypatch.setattr(
-        cli_module, "create_chat_llm_client", _fake_create_chat_llm_client
-    )
     monkeypatch.setattr(cli_module, "_launch_chat_app", _fake_launch_chat_app)
 
     rc = main(
@@ -78,8 +70,7 @@ def test_interactive_cli_launches_app_with_overrides(
     assert resolved.session.max_context_tokens == 1234
     assert resolved.tool_limits.max_file_size_characters == 4096
     assert captured["root_path"] == tmp_path.resolve()
-    assert captured["llm_kwargs"]["provider"] == "xai"
-    assert captured["llm_kwargs"]["api_base_url"] == "https://proxy.example/v1"
+    assert captured["llm_client"] is None
 
 
 def test_interactive_cli_rejects_invalid_temperature(

@@ -14,8 +14,10 @@ from engllm_chat.llm.base import (
 )
 from engllm_chat.llm.factory import create_chat_llm_client
 from engllm_chat.llm.mock import MockLLMClient
-from engllm_chat.llm.ollama import OllamaLLMClient
-from engllm_chat.llm.openai_compatible import OpenAICompatibleChatLLMClient
+from engllm_chat.llm.openai_compatible import (
+    OpenAICompatibleChatLLMClient,
+    normalize_ollama_base_url,
+)
 
 __all__ = [
     "ChatAssistantDeltaEvent",
@@ -30,6 +32,6 @@ __all__ = [
     "ChatTurnStreamEvent",
     "MockLLMClient",
     "OpenAICompatibleChatLLMClient",
-    "OllamaLLMClient",
+    "normalize_ollama_base_url",
     "create_chat_llm_client",
 ]

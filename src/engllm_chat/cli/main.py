@@ -11,7 +11,6 @@ from typing import Any
 from engllm_chat.config import load_chat_config
 from engllm_chat.domain.errors import EngLLMError
 from engllm_chat.domain.models import ChatConfig
-from engllm_chat.llm.factory import create_chat_llm_client
 from engllm_chat.probe_openai_api import main as probe_openai_api_main
 
 
@@ -70,7 +69,7 @@ def _launch_chat_app(
     *,
     root_path: Path,
     config: ChatConfig,
-    llm_client: Any,
+    llm_client: Any | None = None,
 ) -> int:
     from engllm_chat.tools.chat.app import run_chat_app
 
@@ -83,17 +82,9 @@ def _launch_chat_app(
 
 def _run_chat_interactive(args: argparse.Namespace) -> int:
     chat_config = _resolve_chat_config(args)
-    llm_client = create_chat_llm_client(
-        chat_config.llm,
-        provider=chat_config.llm.provider,
-        model_name=chat_config.llm.model_name,
-        ollama_base_url=chat_config.llm.ollama_base_url,
-        api_base_url=chat_config.llm.api_base_url,
-    )
     return _launch_chat_app(
         root_path=args.directory.resolve(),
         config=chat_config,
-        llm_client=llm_client,
     )
 
 

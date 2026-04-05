@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +17,6 @@ from engllm_chat.domain.models import (
     SectionDraft,
     SectionUpdateProposal,
 )
-from engllm_chat.llm import ollama as ollama_module
 from engllm_chat.llm import openai_compatible as openai_compatible_module
 from engllm_chat.llm.base import (
     ChatAssistantDeltaEvent,
@@ -53,21 +50,6 @@ class _FakeStructuredModel(BaseModel):
     tags: list[str]
     metadata: dict[str, str]
     maybe: str | None = None
-
-
-class _FakeURLResponse:
-    def __init__(self, *, status: int = 200, body: str) -> None:
-        self.status = status
-        self._body = body
-
-    def __enter__(self) -> _FakeURLResponse:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return self._body.encode("utf-8")
 
 
 def test_chat_turn_and_stream_event_validators_reject_invalid_combinations() -> None:
@@ -333,216 +315,136 @@ def test_mock_client_covers_section_payloads_default_payloads_and_interrupted_st
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("127.0.0.1:11434", "http://127.0.0.1:11434/api/chat"),
-        ("http://localhost:11434", "http://localhost:11434/api/chat"),
-        ("http://localhost:11434/api", "http://localhost:11434/api/chat"),
-        ("http://localhost:11434/custom", "http://localhost:11434/custom/api/chat"),
+        ("127.0.0.1:11434", "http://127.0.0.1:11434/v1"),
+        ("http://localhost:11434", "http://localhost:11434/v1"),
+        ("http://localhost:11434/api", "http://localhost:11434/api/v1"),
+        ("http://localhost:11434/custom", "http://localhost:11434/custom/v1"),
     ],
 )
 def test_ollama_helper_functions_cover_normalization_and_serialization(
     raw: str,
     expected: str,
 ) -> None:
-    assert ollama_module._normalize_chat_url(raw) == expected
-
-    tool_result = ChatToolResult(
-        call_id="call-1", tool_name="read_file", payload={"path": "README.md"}
-    )
-    serialized_tool = ollama_module._serialize_chat_message(
-        ChatMessage(role="tool", tool_result=tool_result)
-    )
-    assert serialized_tool["role"] == "tool"
-    assert json.loads(serialized_tool["content"])["tool_name"] == "read_file"
-
-    serialized_user = ollama_module._serialize_chat_message(
-        ChatMessage(role="user", content=" hello ")
-    )
-    assert serialized_user == {"role": "user", "content": "hello"}
-    assert (
-        ollama_module._serialize_tool_definition(
-            SimpleNamespace(
-                name="read_file",
-                description="Read one file",
-                input_schema={"type": "object"},
-            )
-        )["function"]["name"]
-        == "read_file"
-    )
-    token_usage = ollama_module._extract_token_usage(
-        {"prompt_eval_count": "bad", "eval_count": "also-bad"}
-    )
-    assert token_usage.input_tokens == 0
-    assert token_usage.output_tokens == 0
+    assert openai_compatible_module.normalize_ollama_base_url(raw) == expected
 
 
-def test_ollama_helpers_and_generate_structured_error_paths(
+def test_ollama_client_uses_openai_compatible_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with pytest.raises(Exception, match="Tool chat message missing tool_result"):
-        ollama_module._serialize_chat_message(ChatMessage.model_construct(role="tool"))
+    class _FakeOpenAIClient:
+        last_init_kwargs: dict[str, object] | None = None
+        captured_payloads: list[dict[str, object]] = []
 
-    with pytest.raises(Exception, match="malformed"):
-        ollama_module._extract_tool_calls({"tool_calls": ["bad"]})
-    with pytest.raises(Exception, match="missing function payload"):
-        ollama_module._extract_tool_calls({"tool_calls": [{}]})
-    with pytest.raises(Exception, match="missing function name"):
-        ollama_module._extract_tool_calls(
-            {"tool_calls": [{"function": {"arguments": {}}}]}
-        )
-    with pytest.raises(Exception, match="missing structured arguments"):
-        ollama_module._extract_tool_calls(
-            {"tool_calls": [{"function": {"name": "read_file", "arguments": "bad"}}]}
-        )
+        def __init__(self, **kwargs: object) -> None:
+            type(self).last_init_kwargs = dict(kwargs)
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
 
-    success_payload = {
-        "message": {"content": '{"answer":"Done"}'},
-    }
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _FakeURLResponse(body=json.dumps(success_payload)),
+        def _create(self, **payload: object) -> object:
+            type(self).captured_payloads.append(dict(payload))
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content='{"answer":"Done"}', tool_calls=[]
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(
+                    prompt_tokens=1,
+                    completion_tokens=2,
+                    total_tokens=3,
+                ),
+            )
+
+    monkeypatch.setattr(openai_compatible_module, "OpenAI", _FakeOpenAIClient)
+
+    client = openai_compatible_module.OpenAICompatibleChatLLMClient(
+        model_name="qwen",
+        provider_name="ollama",
+        api_key_env_var=None,
+        api_key="ollama",
+        base_url=openai_compatible_module.normalize_ollama_base_url(
+            "http://localhost:11434"
+        ),
     )
-    client = ollama_module.OllamaLLMClient(model_name="qwen")
-    response = client.generate_structured(
-        StructuredGenerationRequest(
-            system_prompt="system",
-            user_prompt="user",
+    response = client.generate_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
             response_model=ChatFinalResponse,
             model_name="qwen",
         )
     )
-    assert response.content == ChatFinalResponse(answer="Done")
 
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _FakeURLResponse(status=500, body="server error"),
+    assert response.final_response == ChatFinalResponse(answer="Done")
+    assert _FakeOpenAIClient.last_init_kwargs == {
+        "api_key": "ollama",
+        "base_url": "http://localhost:11434/v1",
+        "timeout": 60.0,
+    }
+    assert (
+        _FakeOpenAIClient.captured_payloads[-1]["response_format"]["type"]
+        == "json_schema"
     )
-    with pytest.raises(Exception, match="status 500"):
-        client.generate_structured(
-            StructuredGenerationRequest(
-                system_prompt="system",
-                user_prompt="user",
-                response_model=ChatFinalResponse,
-                model_name="qwen",
-            )
-        )
-
-    http_error = urllib.error.HTTPError(
-        url="http://localhost",
-        code=404,
-        msg="not found",
-        hdrs=None,
-        fp=None,
-    )
-    monkeypatch.setattr(
-        http_error,
-        "read",
-        lambda: b"missing",
-    )
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(http_error),
-    )
-    with pytest.raises(Exception, match="status 404: missing"):
-        client.generate_structured(
-            StructuredGenerationRequest(
-                system_prompt="system",
-                user_prompt="user",
-                response_model=ChatFinalResponse,
-                model_name="qwen",
-            )
-        )
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(urllib.error.URLError("down")),
-    )
-    with pytest.raises(Exception, match="Cannot connect to Ollama"):
-        client.generate_structured(
-            StructuredGenerationRequest(
-                system_prompt="system",
-                user_prompt="user",
-                response_model=ChatFinalResponse,
-                model_name="qwen",
-            )
-        )
 
 
-def test_ollama_stream_handles_error_and_edge_cases(
+def test_ollama_stream_cancel_closes_openai_compatible_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _StreamingResponse:
-        def __init__(
-            self, *, status: int = 200, lines: list[bytes], close_raises: bool = False
-        ):
-            self.status = status
-            self._lines = list(lines)
-            self._close_raises = close_raises
+    class _FakeStreamingResponse:
+        def __init__(self) -> None:
+            self.closed = False
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            self.close()
-
-        def readline(self) -> bytes:
-            if not self._lines:
-                return b""
-            return self._lines.pop(0)
-
-        def read(self) -> bytes:
-            return b"server error"
+        def __iter__(self):
+            yield SimpleNamespace(
+                usage=None,
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="partial", tool_calls=[]),
+                        finish_reason=None,
+                    )
+                ],
+            )
 
         def close(self) -> None:
-            if self._close_raises:
-                raise OSError("close failed")
+            self.closed = True
 
-    client = ollama_module.OllamaLLMClient(model_name="qwen")
-    request = ChatTurnRequest(
-        messages=[ChatMessage(role="user", content="hello")],
-        response_model=ChatFinalResponse,
+    class _FakeOpenAIClient:
+        last_stream: _FakeStreamingResponse | None = None
+
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **payload: object) -> object:
+            del payload
+            type(self).last_stream = _FakeStreamingResponse()
+            return type(self).last_stream
+
+    monkeypatch.setattr(openai_compatible_module, "OpenAI", _FakeOpenAIClient)
+
+    client = openai_compatible_module.OpenAICompatibleChatLLMClient(
         model_name="qwen",
+        provider_name="ollama",
+        api_key_env_var=None,
+        api_key="ollama",
+        base_url=openai_compatible_module.normalize_ollama_base_url(None),
     )
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _StreamingResponse(status=500, lines=[]),
+    cancelled = client.stream_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_model=ChatFinalResponse,
+            model_name="qwen",
+        )
     )
-    with pytest.raises(Exception, match="status 500"):
-        list(client.stream_chat_turn(request))
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _StreamingResponse(lines=[b"not-json"]),
-    )
-    with pytest.raises(Exception, match="malformed JSON stream chunk"):
-        list(client.stream_chat_turn(request))
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _StreamingResponse(
-            lines=[
-                json.dumps({"message": {"content": 3}, "done": False}).encode("utf-8")
-            ]
-        ),
-    )
-    with pytest.raises(Exception, match="missing assistant content"):
-        list(client.stream_chat_turn(request))
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _StreamingResponse(lines=[]),
-    )
-    with pytest.raises(Exception, match="ended without a final response or tool calls"):
-        list(client.stream_chat_turn(request))
-
-    monkeypatch.setattr(
-        "engllm_chat.llm.ollama.request_lib.urlopen",
-        lambda *_args, **_kwargs: _StreamingResponse(lines=[], close_raises=True),
-    )
-    cancelled = client.stream_chat_turn(request)
     cancelled.cancel()
     cancelled_events = list(cancelled)
     assert isinstance(cancelled_events[-1], ChatInterruptedEvent)
+    assert _FakeOpenAIClient.last_stream is not None
+    assert _FakeOpenAIClient.last_stream.closed is True
 
 
 def test_openai_compatible_helpers_cover_serialization_and_stream_fallbacks() -> None:
