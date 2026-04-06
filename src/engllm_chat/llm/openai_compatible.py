@@ -12,6 +12,8 @@ import json
 import logging
 from typing import Any
 
+from pydantic import ValidationError as PydanticValidationError
+
 from engllm_chat.domain.errors import LLMError, ValidationError
 from engllm_chat.domain.models import ChatMessage
 from engllm_chat.llm._openai_compatible.parsing import (
@@ -150,6 +152,15 @@ class OpenAICompatibleChatLLMClient:
             )
             try:
                 response = self._client.beta.chat.completions.parse(**payload)
+            except PydanticValidationError as exc:
+                last_schema_error = exc
+                if attempt_index + 1 >= _MAX_SCHEMA_ATTEMPTS:
+                    raise LLMError(
+                        "OpenAI-compatible provider failed to return a valid "
+                        f"structured response after {_MAX_SCHEMA_ATTEMPTS} attempts: {exc}"
+                    ) from exc
+                request_messages.append(_build_schema_retry_feedback(str(exc)))
+                continue
             except Exception as exc:  # pragma: no cover - provider/network dependent
                 raise LLMError(f"{self._provider_name} request failed: {exc}") from exc
 

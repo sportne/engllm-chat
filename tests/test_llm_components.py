@@ -6,6 +6,7 @@ import logging
 
 import pytest
 from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 from engllm_chat.domain.errors import LLMError, ValidationError
 from engllm_chat.domain.models import (
@@ -345,6 +346,79 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
     assert response_format is not ChatFinalResponse
     assert "action" in response_format.model_fields
     assert "tools" not in _FakeOpenAIClient.captured_parse_payloads[-1]
+
+
+def test_openai_compatible_generate_chat_turn_retries_sdk_schema_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+
+    class _SchemaErrorThenSuccessClient(_FakeOpenAIClient):
+        attempts = 0
+
+        @classmethod
+        def reset(cls) -> None:
+            super().reset()
+            cls.attempts = 0
+
+        def _parse(self, **payload: object) -> object:
+            type(self).captured_parse_payloads.append(dict(payload))
+            type(self).attempts += 1
+            if type(self).attempts == 1:
+                try:
+                    ChatFinalResponse.model_validate({"answer": ""})
+                except PydanticValidationError as exc:
+                    raise exc
+            return _FakeChatCompletionResponse(
+                message=_FakeMessage(
+                    content="Hosted done after retry",
+                    parsed={
+                        "action": {
+                            "kind": "final_response",
+                            "response": {"answer": "Hosted done after retry"},
+                        }
+                    },
+                ),
+                usage=_FakeUsage(prompt_tokens=2, completion_tokens=4, total_tokens=6),
+            )
+
+    monkeypatch.setattr(
+        "engllm_chat.llm.openai_compatible.OpenAI",
+        _SchemaErrorThenSuccessClient,
+    )
+    _SchemaErrorThenSuccessClient.reset()
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="gemini",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+
+    response = client.generate_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_model=ChatFinalResponse,
+            model_name="gemini-test",
+        )
+    )
+
+    assert response.finish_reason == "final_response"
+    assert response.final_response == ChatFinalResponse(
+        answer="Hosted done after retry"
+    )
+    assert response.token_usage is not None
+    assert response.token_usage.total_tokens == 6
+    assert len(_SchemaErrorThenSuccessClient.captured_parse_payloads) == 2
+    retry_messages = _SchemaErrorThenSuccessClient.captured_parse_payloads[1][
+        "messages"
+    ]
+    assert isinstance(retry_messages, list)
+    assert "did not satisfy the required structured schema" in str(
+        retry_messages[-1]["content"]
+    )
 
 
 def test_openai_compatible_verbose_logging_emits_request_and_response_messages(
