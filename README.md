@@ -24,13 +24,61 @@ pip install -e .[dev]
 
 ## Quick start
 
-Create a chat config file:
+Create a chat config file. This `ollama` example is the quickest way to get
+started locally:
 
 ```yaml
 llm:
   provider: ollama
   model_name: qwen2.5:7b-instruct
   api_base_url: http://127.0.0.1:11434
+```
+
+Other provider config examples:
+
+`mock`
+
+```yaml
+llm:
+  provider: mock
+  model_name: mock-chat
+  temperature: 0.0
+```
+
+`openai`
+
+```yaml
+llm:
+  provider: openai
+  model_name: gpt-5-mini
+  api_base_url: https://api.openai.com/v1
+```
+
+`xai`
+
+```yaml
+llm:
+  provider: xai
+  model_name: grok-4-fast-reasoning
+  api_base_url: https://api.x.ai/v1
+```
+
+`anthropic`
+
+```yaml
+llm:
+  provider: anthropic
+  model_name: claude-sonnet-4-5
+  api_base_url: https://api.anthropic.com/v1/
+```
+
+`gemini`
+
+```yaml
+llm:
+  provider: gemini
+  model_name: gemini-2.5-flash
+  api_base_url: https://generativelanguage.googleapis.com/v1beta/openai/
 ```
 
 Launch chat:
