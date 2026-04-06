@@ -136,6 +136,18 @@ Or, after installation:
 engllm-chat . --config chat.yaml
 ```
 
+If you want to ship the app as one file, build the `.pex` artifact and run it
+with Python:
+
+```bash
+make package-pex
+python dist/engllm-chat-0.1.0-py311-linux_x86_64.pex . --config chat.yaml
+```
+
+That artifact includes the project’s Python dependencies but still relies on an
+installed Python runtime. The current build path is intended for the platform
+you build on.
+
 You can point the command at any directory:
 
 ```bash
@@ -322,6 +334,22 @@ export GEMINI_API_KEY=...
   --require-tool-call \
   --verbose-llm
 ```
+
+### Packaging smoke test
+
+Build the single-file `.pex` artifact and verify the packaged CLI still starts:
+
+```bash
+make smoke-pex
+```
+
+This checks:
+
+- the wheel build path
+- dependency collection into a local wheelhouse
+- `.pex` artifact generation
+- `python <artifact>.pex --help`
+- `python <artifact>.pex probe-openai-api --help`
 
 ## Hosted Provider Examples
 

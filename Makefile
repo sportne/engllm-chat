@@ -4,12 +4,13 @@ PYTHON = $(VENV)/bin/python
 SRC_DIR := src
 TEST_DIR := tests
 PACKAGE := engllm_chat
+PACKAGE_TOOL_DEPS := "build==1.4.2" "pex==2.54.3" "setuptools>=82.0.1,<83" "wheel>=0.46.3,<0.47"
 
 .PHONY: \
     help setup-venv install-dev \
     format format-check \
     lint typecheck \
-    test coverage smoke-chat smoke-ollama-chat \
+    test coverage smoke-chat smoke-ollama-chat smoke-pex \
     package clean ci
 
 OLLAMA_BASE_URL ?= http://127.0.0.1:11434
@@ -30,7 +31,9 @@ help:
 	@echo "  make coverage     - Run tests with coverage threshold"
 	@echo "  make smoke-chat   - Run the opt-in provider-backed chat workflow smoke test"
 	@echo "  make smoke-ollama-chat - Run the opt-in local Ollama chat workflow smoke test"
+	@echo "  make smoke-pex    - Build the .pex artifact and smoke-check the packaged CLI"
 	@echo "  make package      - Build source and wheel"
+	@echo "  make package-pex  - Build the single-file .pex artifact"
 	@echo "  make clean        - Remove build artifacts"
 	@echo "  make ci           - Run format-check, lint, typecheck, and one coverage-backed test pass"
 
@@ -68,8 +71,16 @@ smoke-ollama-chat:
 	$(PYTHON) -m engllm_chat.smoke_chat --provider ollama --directory . --model "$(OLLAMA_MODEL)" --base-url "$(OLLAMA_BASE_URL)" --require-tool-call
 
 package:
-	$(PYTHON) -m pip install --upgrade build
+	$(PYTHON) -m pip install --upgrade "build==1.4.2"
 	$(PYTHON) -m build
+
+package-pex:
+	$(PYTHON) -m pip install --upgrade $(PACKAGE_TOOL_DEPS)
+	$(PYTHON) scripts/build_pex.py --project-root .
+
+smoke-pex:
+	$(PYTHON) -m pip install --upgrade $(PACKAGE_TOOL_DEPS)
+	$(PYTHON) scripts/smoke_pex.py --project-root .
 
 clean:
 	rm -rf build dist *.egg-info

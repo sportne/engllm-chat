@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Standalone interactive directory chat over repository files."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "EngLLM Contributors" }
 ]
@@ -24,9 +24,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "black==26.3.1",
+  "build==1.4.2",
   "isort==8.0.1",
   "ruff==0.15.6",
   "mypy==1.19.1",
+  "pex==2.54.3",
   "types-PyYAML==6.0.12.20250915",
   "pytest==9.0.2",
   "pytest-cov==7.0.0",

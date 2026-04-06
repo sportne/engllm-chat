@@ -49,6 +49,37 @@ The probe now distinguishes what `engllm-chat` actually needs at runtime from
 broader OpenAI-compatible surface area. For the chat runtime, the important
 checks are Chat Completions and Structured Outputs for the selected text model.
 
+## Single-file artifact
+
+You can package `engllm-chat` as one `.pex` file that bundles the app and its
+Python dependencies while still relying on an installed Python runtime:
+
+```bash
+make package-pex
+```
+
+The build writes a platform- and Python-specific artifact into `dist/`, for
+example:
+
+```text
+dist/engllm-chat-0.1.0-py311-linux_x86_64.pex
+```
+
+Run it with Python:
+
+```bash
+python dist/engllm-chat-0.1.0-py311-linux_x86_64.pex . --config chat.yaml
+python dist/engllm-chat-0.1.0-py311-linux_x86_64.pex probe-openai-api --help
+```
+
+The `.pex` bundles dependencies but not Python itself. This first pass is
+current-platform-first, so a broader release process would build one artifact
+per target OS and Python version.
+
+Tagged releases are intended to ship as CI-built `.pex` assets. The current
+GitHub Actions pipeline produces the packaged artifact on Linux with Python
+3.11, so release assets use the matching platform/Python tag in the filename.
+
 Run a repeatable chat workflow smoke test:
 
 ```bash
@@ -105,5 +136,5 @@ You can also override a hosted endpoint explicitly with `--api-base-url`.
 ### Run and debug it
 
 - [docs/TESTING_AND_DEBUGGING.md](docs/TESTING_AND_DEBUGGING.md) for tests,
-  smoke runs, and debugging guidance
+  smoke runs, packaging smoke checks, and debugging guidance
 - [docs/CHAT_PLAN.md](docs/CHAT_PLAN.md) for historical implementation context

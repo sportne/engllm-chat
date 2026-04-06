@@ -106,6 +106,27 @@ make smoke-ollama-chat \
   OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
 
+### Packaging smoke test
+
+Build the single-file `.pex` artifact and verify the packaged CLI still starts:
+
+```bash
+make smoke-pex
+```
+
+This validates:
+
+- the wheel build path
+- dependency collection into a local wheelhouse
+- `.pex` artifact generation
+- `python <artifact>.pex --help`
+- `python <artifact>.pex probe-openai-api --help`
+
+The `.pex` artifact bundles dependencies but still relies on an installed
+Python runtime, and this build path is intentionally current-platform-first.
+GitHub Actions also runs this packaging path so tagged releases can publish the
+resulting `.pex` asset.
+
 ### Direct module usage with verbose logging
 
 Use the smoke runner directly when you want detailed request/response logging:
