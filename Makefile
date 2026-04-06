@@ -4,7 +4,7 @@ PYTHON = $(VENV)/bin/python
 SRC_DIR := src
 TEST_DIR := tests
 PACKAGE := engllm_chat
-PACKAGE_TOOL_DEPS := "build==1.4.2" "pex==2.54.3" "setuptools>=82.0.1,<83" "wheel>=0.46.3,<0.47"
+PACKAGE_TOOL_DEPS := "build==1.4.2" "pex==2.92.0" "setuptools>=82.0.1,<83" "wheel>=0.46.3,<0.47"
 
 .PHONY: \
     help setup-venv install-dev \
