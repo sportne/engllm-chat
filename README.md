@@ -62,14 +62,14 @@ The build writes a platform- and Python-specific artifact into `dist/`, for
 example:
 
 ```text
-dist/engllm-chat-0.1.0-py311-linux_x86_64.pex
+dist/engllm-chat-0.2.0-py311-linux_x86_64.pex
 ```
 
 Run it with Python:
 
 ```bash
-python dist/engllm-chat-0.1.0-py311-linux_x86_64.pex . --config chat.yaml
-python dist/engllm-chat-0.1.0-py311-linux_x86_64.pex probe-openai-api --help
+python dist/engllm-chat-0.2.0-py311-linux_x86_64.pex . --config chat.yaml
+python dist/engllm-chat-0.2.0-py311-linux_x86_64.pex probe-openai-api --help
 ```
 
 The `.pex` bundles dependencies but not Python itself. This first pass is

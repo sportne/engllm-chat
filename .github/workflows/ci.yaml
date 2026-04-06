@@ -91,3 +91,4 @@ jobs:
         with:
           files: release-artifacts/*.pex
           fail_on_unmatched_files: true
+          prerelease: true

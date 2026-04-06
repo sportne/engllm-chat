@@ -141,7 +141,7 @@ with Python:
 
 ```bash
 make package-pex
-python dist/engllm-chat-0.1.0-py311-linux_x86_64.pex . --config chat.yaml
+python dist/engllm-chat-0.2.0-py311-linux_x86_64.pex . --config chat.yaml
 ```
 
 That artifact includes the project’s Python dependencies but still relies on an

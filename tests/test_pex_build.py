@@ -19,24 +19,24 @@ from engllm_chat._pex_build import (
 def test_read_project_version_matches_repo_metadata() -> None:
     project_root = Path(__file__).resolve().parents[1]
     version = read_project_version(project_root / "pyproject.toml")
-    assert version == "0.1.0"
+    assert version == "0.2.0"
 
 
 def test_build_artifact_name_includes_version_python_and_platform() -> None:
     artifact_name = build_artifact_name(
-        "0.1.0",
+        "0.2.0",
         python_version=(3, 11),
         platform_tag="linux-x86_64",
     )
 
-    assert artifact_name == "engllm-chat-0.1.0-py311-linux_x86_64.pex"
+    assert artifact_name == "engllm-chat-0.2.0-py311-linux_x86_64.pex"
 
 
 def test_build_commands_include_expected_packaging_flags(tmp_path: Path) -> None:
     dist_dir = tmp_path / "dist"
     wheelhouse_dir = tmp_path / "wheelhouse"
-    wheel_path = dist_dir / "engllm_chat-0.1.0-py3-none-any.whl"
-    output_path = dist_dir / "engllm-chat-0.1.0-py311-linux_x86_64.pex"
+    wheel_path = dist_dir / "engllm_chat-0.2.0-py3-none-any.whl"
+    output_path = dist_dir / "engllm-chat-0.2.0-py311-linux_x86_64.pex"
 
     wheel_command = build_wheel_command(".venv/bin/python", dist_dir)
     wheelhouse_command = build_wheelhouse_command(
@@ -48,7 +48,7 @@ def test_build_commands_include_expected_packaging_flags(tmp_path: Path) -> None
         ".venv/bin/python",
         wheel_paths=[
             wheelhouse_dir / "dependency.whl",
-            wheelhouse_dir / "engllm_chat-0.1.0-py3-none-any.whl",
+            wheelhouse_dir / "engllm_chat-0.2.0-py3-none-any.whl",
         ],
         output_path=output_path,
     )
@@ -76,7 +76,7 @@ def test_build_commands_include_expected_packaging_flags(tmp_path: Path) -> None
         "-m",
         "pex",
         str(wheelhouse_dir / "dependency.whl"),
-        str(wheelhouse_dir / "engllm_chat-0.1.0-py3-none-any.whl"),
+        str(wheelhouse_dir / "engllm_chat-0.2.0-py3-none-any.whl"),
         "-c",
         "engllm-chat",
         "--venv",
@@ -102,7 +102,7 @@ def test_smoke_test_pex_artifact_runs_help_commands(
 
     monkeypatch.setattr("engllm_chat._pex_build._run_checked", _fake_run_checked)
 
-    artifact_path = tmp_path / "dist" / "engllm-chat-0.1.0.pex"
+    artifact_path = tmp_path / "dist" / "engllm-chat-0.2.0.pex"
     smoke_test_pex_artifact(
         artifact_path,
         project_root=tmp_path,
