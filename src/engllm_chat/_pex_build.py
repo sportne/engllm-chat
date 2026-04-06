@@ -48,7 +48,6 @@ def build_wheel_command(python_executable: str, dist_dir: Path) -> list[str]:
         "-m",
         "build",
         "--wheel",
-        "--no-isolation",
         "--outdir",
         str(dist_dir),
     ]

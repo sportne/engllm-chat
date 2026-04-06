@@ -58,7 +58,6 @@ def test_build_commands_include_expected_packaging_flags(tmp_path: Path) -> None
         "-m",
         "build",
         "--wheel",
-        "--no-isolation",
         "--outdir",
         str(dist_dir),
     ]
