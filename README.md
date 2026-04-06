@@ -49,6 +49,12 @@ The probe now distinguishes what `engllm-chat` actually needs at runtime from
 broader OpenAI-compatible surface area. For the chat runtime, the important
 checks are Chat Completions and Structured Outputs for the selected text model.
 
+## UI Example
+
+Here is an example of the Textual chat interface in use:
+
+![engllm-chat Textual UI example](imgs/UI_Example.png)
+
 ## Single-file artifact
 
 You can package `engllm-chat` as one `.pex` file that bundles the app and its
