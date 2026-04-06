@@ -134,8 +134,7 @@ def build_chat_system_prompt(
         )
     )
     response_fields = "\n".join(
-        f"- {field_name}: "
-        f"{_FIELD_GUIDANCE.get(field_name, _DEFAULT_FIELD_GUIDANCE)}"
+        f"- {field_name}: {_FIELD_GUIDANCE.get(field_name, _DEFAULT_FIELD_GUIDANCE)}"
         for field_name in response_model.model_fields
     )
 

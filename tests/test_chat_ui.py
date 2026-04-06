@@ -33,9 +33,6 @@ from engllm_chat.tools.chat.app import (
     InterruptConfirmModal,
     TranscriptCopyModal,
     TranscriptEntry,
-    _format_citation,
-    _format_final_response,
-    _format_final_response_markdown,
     run_chat_app,
 )
 from engllm_chat.tools.chat.models import (
@@ -44,6 +41,7 @@ from engllm_chat.tools.chat.models import (
     ChatWorkflowStatusEvent,
     ChatWorkflowTurnResult,
 )
+from engllm_chat.tools.chat.presentation import format_citation, format_final_response
 
 
 @pytest.fixture(autouse=True)
@@ -188,17 +186,15 @@ class _GatedTurnStream:
 
 
 def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
+    assert format_citation(ChatCitation(source_path=Path("src/app.py"))) == "src/app.py"
     assert (
-        _format_citation(ChatCitation(source_path=Path("src/app.py"))) == "src/app.py"
-    )
-    assert (
-        _format_citation(
+        format_citation(
             ChatCitation(source_path=Path("src/app.py"), line_start=4, line_end=6)
         )
         == "src/app.py:4-6"
     )
 
-    formatted = _format_final_response(
+    formatted = format_final_response(
         ChatFinalResponse(
             answer="Done",
             citations=[ChatCitation(source_path=Path("src/app.py"), line_start=2)],
@@ -211,20 +207,6 @@ def test_chat_app_format_helpers_and_transcript_entry_rendering() -> None:
     assert "Uncertainty:" in formatted
     assert "Missing Information:" in formatted
     assert "Follow-up Suggestions:" in formatted
-    markdown_formatted = _format_final_response_markdown(
-        ChatFinalResponse(
-            answer="1. **Done** with `code`",
-            citations=[ChatCitation(source_path=Path("src/app.py"), line_start=2)],
-            uncertainty=["Unclear"],
-            missing_information=["TBD"],
-            follow_up_suggestions=["Inspect src"],
-        )
-    )
-    assert markdown_formatted.startswith("1. **Done** with `code`")
-    assert "### Citations" in markdown_formatted
-    assert "### Uncertainty" in markdown_formatted
-    assert "### Missing Information" in markdown_formatted
-    assert "### Follow-up Suggestions" in markdown_formatted
 
     entry = TranscriptEntry(role="assistant", text="draft")
     assert entry.has_class("transcript-entry")

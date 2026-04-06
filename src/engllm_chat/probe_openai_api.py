@@ -1291,8 +1291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_summary = _build_runtime_summary(results, text_model=context.text_model)
     required_operations = runtime_summary["required_operations"]
     print(
-        "engllm-chat runtime: "
-        f"{_format_runtime_status(str(runtime_summary['status']))}"
+        f"engllm-chat runtime: {_format_runtime_status(str(runtime_summary['status']))}"
     )
     print(f"  {runtime_summary['note']}")
     print("Required for engllm-chat:")

@@ -13,10 +13,8 @@ from textual.screen import Screen
 from textual.widgets import Button, Static
 
 from engllm_chat.domain.models import (
-    ChatCitation,
     ChatConfig,
     ChatCredentialPromptMetadata,
-    ChatFinalResponse,
 )
 from engllm_chat.llm.base import ChatLLMClient
 from engllm_chat.llm.factory import create_chat_llm_client
@@ -28,9 +26,6 @@ from engllm_chat.tools.chat.models import (
 from engllm_chat.tools.chat.presentation import (
     AssistantMarkdownEntry,
     TranscriptEntry,
-    format_citation,
-    format_final_response,
-    format_final_response_markdown,
 )
 from engllm_chat.tools.chat.screens import (
     ComposerTextArea,
@@ -52,23 +47,8 @@ __all__ = [
     "InterruptConfirmModal",
     "TranscriptCopyModal",
     "TranscriptEntry",
-    "_format_citation",
-    "_format_final_response",
-    "_format_final_response_markdown",
     "run_chat_app",
 ]
-
-
-def _format_citation(citation: ChatCitation) -> str:
-    return format_citation(citation)
-
-
-def _format_final_response(response: ChatFinalResponse) -> str:
-    return format_final_response(response)
-
-
-def _format_final_response_markdown(response: ChatFinalResponse) -> str:
-    return format_final_response_markdown(response)
 
 
 class ChatScreen(Screen[None]):

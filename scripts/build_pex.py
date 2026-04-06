@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a single-file .pex artifact for engllm-chat."""
+"""Build or smoke-check a single-file .pex artifact for engllm-chat."""
 
 from __future__ import annotations
 

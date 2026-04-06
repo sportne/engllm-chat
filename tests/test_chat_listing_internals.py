@@ -63,8 +63,9 @@ def test_content_module_loads_markitdown_using_injected_hooks(tmp_path: Path) ->
     loaded = content.load_readable_content(
         sample_file,
         markitdown_cache_path=lambda path: cache_path,
-        convert_with_markitdown=lambda path: calls.append(path.name)
-        or "# Converted\n\nBody",
+        convert_with_markitdown=lambda path: (
+            calls.append(path.name) or "# Converted\n\nBody"
+        ),
     )
     cached = content.load_readable_content(
         sample_file,

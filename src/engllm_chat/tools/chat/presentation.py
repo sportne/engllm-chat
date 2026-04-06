@@ -44,29 +44,6 @@ def format_final_response(response: ChatFinalResponse) -> str:
     return "\n\n".join(sections)
 
 
-def format_final_response_markdown(response: ChatFinalResponse) -> str:
-    """Return one final chat response as markdown for transcript rendering."""
-
-    sections = [response.answer.rstrip()]
-    if response.citations:
-        citations = "\n".join(
-            f"- {format_citation(citation)}" for citation in response.citations
-        )
-        sections.append(f"### Citations\n{citations}")
-    if response.uncertainty:
-        uncertainty = "\n".join(f"- {item}" for item in response.uncertainty)
-        sections.append(f"### Uncertainty\n{uncertainty}")
-    if response.missing_information:
-        missing_information = "\n".join(
-            f"- {item}" for item in response.missing_information
-        )
-        sections.append(f"### Missing Information\n{missing_information}")
-    if response.follow_up_suggestions:
-        follow_ups = "\n".join(f"- {item}" for item in response.follow_up_suggestions)
-        sections.append(f"### Follow-up Suggestions\n{follow_ups}")
-    return "\n\n".join(section for section in sections if section)
-
-
 def format_final_response_metadata(response: ChatFinalResponse) -> str:
     """Return supplemental response sections as plain transcript text."""
 

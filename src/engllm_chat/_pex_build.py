@@ -109,6 +109,19 @@ def _run_checked(command: list[str], *, cwd: Path) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
+def smoke_test_pex_artifact(
+    artifact_path: Path,
+    *,
+    project_root: Path,
+    python_executable: str,
+) -> None:
+    _run_checked([python_executable, str(artifact_path), "--help"], cwd=project_root)
+    _run_checked(
+        [python_executable, str(artifact_path), "probe-openai-api", "--help"],
+        cwd=project_root,
+    )
+
+
 def build_pex_artifact(
     *,
     project_root: Path,
@@ -176,6 +189,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the working build directory (default: <project-root>/build).",
     )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="After building, verify the packaged CLI help paths still work.",
+    )
     return parser
 
 
@@ -188,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
         dist_dir=Path(args.dist_dir) if args.dist_dir else None,
         build_dir=Path(args.build_dir) if args.build_dir else None,
     )
+    if args.smoke:
+        smoke_test_pex_artifact(
+            artifact_path,
+            project_root=Path(args.project_root).resolve(),
+            python_executable=args.python,
+        )
     print(artifact_path)
     return 0
 

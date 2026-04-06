@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from engllm_chat._pex_build import (
     DEFAULT_PYTHON_SHEBANG,
     build_artifact_name,
@@ -10,6 +12,7 @@ from engllm_chat._pex_build import (
     build_wheelhouse_command,
     normalize_platform_tag,
     read_project_version,
+    smoke_test_pex_artifact,
 )
 
 
@@ -86,3 +89,27 @@ def test_build_commands_include_expected_packaging_flags(tmp_path: Path) -> None
 
 def test_normalize_platform_tag_replaces_filename_unfriendly_characters() -> None:
     assert normalize_platform_tag("macosx-14.0-arm64") == "macosx_14_0_arm64"
+
+
+def test_smoke_test_pex_artifact_runs_help_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    commands: list[list[str]] = []
+
+    def _fake_run_checked(command: list[str], *, cwd: Path) -> None:
+        assert cwd == tmp_path
+        commands.append(command)
+
+    monkeypatch.setattr("engllm_chat._pex_build._run_checked", _fake_run_checked)
+
+    artifact_path = tmp_path / "dist" / "engllm-chat-0.1.0.pex"
+    smoke_test_pex_artifact(
+        artifact_path,
+        project_root=tmp_path,
+        python_executable=".venv/bin/python",
+    )
+
+    assert commands == [
+        [".venv/bin/python", str(artifact_path), "--help"],
+        [".venv/bin/python", str(artifact_path), "probe-openai-api", "--help"],
+    ]

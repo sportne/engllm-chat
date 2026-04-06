@@ -4,7 +4,6 @@ PYTHON = $(VENV)/bin/python
 SRC_DIR := src
 TEST_DIR := tests
 PACKAGE := engllm_chat
-PACKAGE_TOOL_DEPS := "build==1.4.2" "pex==2.92.0" "setuptools>=82.0.1,<83" "wheel>=0.46.3,<0.47"
 
 .PHONY: \
     help setup-venv install-dev \
@@ -23,8 +22,8 @@ help:
 	@echo "engllm-chat Makefile targets:"
 	@echo "  make setup-venv   - Create virtual environment"
 	@echo "  make install-dev  - Install project with dev dependencies"
-	@echo "  make format       - Run black and isort"
-	@echo "  make format-check - Check black and isort formatting"
+	@echo "  make format       - Run Ruff formatting"
+	@echo "  make format-check - Check Ruff formatting"
 	@echo "  make lint         - Run ruff linting"
 	@echo "  make typecheck    - Run mypy static checks"
 	@echo "  make test         - Run tests without coverage"
@@ -45,12 +44,10 @@ install-dev:
 	$(PYTHON) -m pip install -e .[dev]
 
 format:
-	$(PYTHON) -m black $(SRC_DIR) $(TEST_DIR)
-	$(PYTHON) -m isort $(SRC_DIR) $(TEST_DIR)
+	$(PYTHON) -m ruff format $(SRC_DIR) $(TEST_DIR)
 
 format-check:
-	$(PYTHON) -m black --check $(SRC_DIR) $(TEST_DIR)
-	$(PYTHON) -m isort --check-only $(SRC_DIR) $(TEST_DIR)
+	$(PYTHON) -m ruff format --check $(SRC_DIR) $(TEST_DIR)
 
 lint:
 	$(PYTHON) -m ruff check $(SRC_DIR) $(TEST_DIR)
@@ -71,16 +68,13 @@ smoke-ollama-chat:
 	$(PYTHON) -m engllm_chat.smoke_chat --provider ollama --directory . --model "$(OLLAMA_MODEL)" --base-url "$(OLLAMA_BASE_URL)" --require-tool-call
 
 package:
-	$(PYTHON) -m pip install --upgrade "build==1.4.2"
 	$(PYTHON) -m build
 
 package-pex:
-	$(PYTHON) -m pip install --upgrade $(PACKAGE_TOOL_DEPS)
 	$(PYTHON) scripts/build_pex.py --project-root .
 
 smoke-pex:
-	$(PYTHON) -m pip install --upgrade $(PACKAGE_TOOL_DEPS)
-	$(PYTHON) scripts/smoke_pex.py --project-root .
+	$(PYTHON) scripts/build_pex.py --project-root . --smoke
 
 clean:
 	rm -rf build dist *.egg-info
