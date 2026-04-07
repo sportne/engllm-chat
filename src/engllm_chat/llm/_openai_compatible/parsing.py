@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -10,6 +11,11 @@ from pydantic import BaseModel
 from engllm_chat.domain.errors import LLMError
 from engllm_chat.domain.models import ChatTokenUsage, ChatToolCall
 from engllm_chat.llm.base import validate_payload
+
+_JSON_FENCE_RE = re.compile(
+    r"^\s*```[ \t]*json[ \t]*\r?\n(?P<body>.*)\r?\n```[ \t]*\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _extract_message_text(message: Any) -> str:
@@ -35,6 +41,15 @@ def _extract_message_text(message: Any) -> str:
     return "".join(text_parts)
 
 
+def _strip_outer_json_fence(content_text: str) -> str:
+    """Unwrap one outer ```json fenced block when the whole payload is fenced."""
+
+    match = _JSON_FENCE_RE.match(content_text)
+    if match is None:
+        return content_text
+    return match.group("body").strip()
+
+
 def _extract_action(
     action_response_model: type[BaseModel],
     message: Any,
@@ -52,7 +67,9 @@ def _extract_action(
     if not content_text:
         raise LLMError("OpenAI-compatible response missing assistant content")
     try:
-        return action_response_model.model_validate_json(content_text)
+        return action_response_model.model_validate_json(
+            _strip_outer_json_fence(content_text)
+        )
     except Exception as exc:
         raise LLMError(
             "OpenAI-compatible provider returned malformed action JSON"

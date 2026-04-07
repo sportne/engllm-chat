@@ -465,10 +465,72 @@ def test_openai_compatible_helpers_cover_serialization_and_parsing_fallbacks() -
     )
     assert json_action.action.response == ChatFinalResponse(answer="From JSON")
 
+    fenced_json_action = openai_compatible_module._extract_action(
+        action_model,
+        SimpleNamespace(
+            content=(
+                "```json\n"
+                '{"action":{"kind":"final_response","response":{"answer":"From fenced JSON"}}}\n'
+                "```"
+            ),
+            parsed=None,
+        ),
+    )
+    assert fenced_json_action.action.response == ChatFinalResponse(
+        answer="From fenced JSON"
+    )
+
+    uppercase_fenced_json_action = openai_compatible_module._extract_action(
+        action_model,
+        SimpleNamespace(
+            content=(
+                "\n  ```JSON\n"
+                '{"action":{"kind":"final_response","response":{"answer":"From uppercase fenced JSON"}}}\n'
+                "```  \n"
+            ),
+            parsed=None,
+        ),
+    )
+    assert uppercase_fenced_json_action.action.response == ChatFinalResponse(
+        answer="From uppercase fenced JSON"
+    )
+
     with pytest.raises(Exception, match="malformed action JSON"):
         openai_compatible_module._extract_action(
             action_model,
             SimpleNamespace(content="not-json", parsed=None),
+        )
+    with pytest.raises(Exception, match="malformed action JSON"):
+        openai_compatible_module._extract_action(
+            action_model,
+            SimpleNamespace(
+                content=(
+                    "```\n"
+                    '{"action":{"kind":"final_response","response":{"answer":"Unlabeled"}}}\n'
+                    "```"
+                ),
+                parsed=None,
+            ),
+        )
+    with pytest.raises(Exception, match="malformed action JSON"):
+        openai_compatible_module._extract_action(
+            action_model,
+            SimpleNamespace(
+                content=(
+                    "Here is the JSON:\n\n```json\n"
+                    '{"action":{"kind":"final_response","response":{"answer":"Mixed"}}}\n'
+                    "```"
+                ),
+                parsed=None,
+            ),
+        )
+    with pytest.raises(Exception, match="malformed action JSON"):
+        openai_compatible_module._extract_action(
+            action_model,
+            SimpleNamespace(
+                content='```json\n{"action":{"kind":"final_response","response":{"answer":"Broken"}}\n```',
+                parsed=None,
+            ),
         )
     with pytest.raises(Exception, match="missing assistant content"):
         openai_compatible_module._extract_action(

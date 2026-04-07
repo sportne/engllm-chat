@@ -672,6 +672,48 @@ def test_openai_compatible_generate_chat_turn_retries_after_schema_failure(
     assert "malformed action JSON" in str(second_messages[-1]["content"])
 
 
+def test_openai_compatible_generate_chat_turn_parses_json_fenced_raw_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_parse_responses = [
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content=(
+                    "```json\n"
+                    '{"action":{"kind":"final_response","response":{"answer":"Recovered from fenced JSON"}}}\n'
+                    "```"
+                ),
+                parsed=None,
+            ),
+            usage=_FakeUsage(prompt_tokens=6, completion_tokens=4, total_tokens=10),
+        ),
+    ]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai",
+        api_key_env_var=None,
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+
+    response = client.generate_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_model=ChatFinalResponse,
+            model_name="gpt-test",
+        )
+    )
+
+    assert response.finish_reason == "final_response"
+    assert response.final_response == ChatFinalResponse(
+        answer="Recovered from fenced JSON"
+    )
+    assert len(_FakeOpenAIClient.captured_parse_payloads) == 1
+
+
 def test_openai_compatible_generate_chat_turn_raises_after_three_schema_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
