@@ -12,7 +12,6 @@ from engllm_chat.llm._openai_compatible.retries import (
 )
 from engllm_chat.llm._openai_compatible.transport import (
     build_openai_client,
-    normalize_ollama_base_url,
     resolve_api_token,
 )
 
@@ -27,19 +26,9 @@ def test_transport_helpers_cover_token_resolution_and_client_creation(
 ) -> None:
     monkeypatch.delenv("TEST_API_KEY", raising=False)
 
-    assert (
-        resolve_api_token(
-            provider_name="ollama",
-            api_key_env_var=None,
-            api_key=None,
-        )
-        == "ollama"
-    )
-
     monkeypatch.setenv("TEST_API_KEY", "from-env")
     assert (
         resolve_api_token(
-            provider_name="openai",
             api_key_env_var="TEST_API_KEY",
             api_key=None,
         )
@@ -59,7 +48,6 @@ def test_transport_helpers_cover_token_resolution_and_client_creation(
         "base_url": "https://api.openai.com/v1",
         "timeout": 12.0,
     }
-    assert normalize_ollama_base_url("localhost:11434") == "http://localhost:11434/v1"
 
 
 def test_transport_helpers_raise_for_missing_sdk_or_api_key(
@@ -69,7 +57,6 @@ def test_transport_helpers_raise_for_missing_sdk_or_api_key(
 
     with pytest.raises(LLMError, match="MISSING_KEY is not configured"):
         resolve_api_token(
-            provider_name="openai",
             api_key_env_var="MISSING_KEY",
             api_key=None,
         )
@@ -78,7 +65,7 @@ def test_transport_helpers_raise_for_missing_sdk_or_api_key(
         build_openai_client(
             openai_client_class=None,
             provider_name="openai",
-            api_key_env_var=None,
+            api_key_env_var="ENGLLM_CHAT_API_KEY",
             api_key="secret",
             base_url="https://api.openai.com/v1",
             timeout_seconds=60.0,

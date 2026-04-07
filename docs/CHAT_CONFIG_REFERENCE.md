@@ -20,12 +20,10 @@ The chat config has five top-level sections:
 
 ```yaml
 llm:
-  provider: ollama
   model_name: qwen2.5:7b-instruct
   temperature: 0.1
-  api_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434/v1
   timeout_seconds: 60.0
-  api_key_env_var: null
   prompt_for_api_key_if_missing: true
   verbose_llm_logging: false
 
@@ -56,34 +54,16 @@ ui:
 
 ## `llm`
 
-This section controls which provider you use and how the provider client is
-configured.
-
-### `provider`
-
-Allowed values:
-
-- `ollama`
-- `mock`
-- `openai`
-- `xai`
-- `anthropic`
-- `gemini`
-
-Use:
-
-- `mock` for deterministic local testing
-- `ollama` for a local model
-- hosted providers for real remote inference
+This section controls the shared OpenAI-compatible runtime path.
 
 ### `model_name`
 
-The provider model to use.
+The model to use for the selected endpoint.
 
 Change this when:
 
 - you want a larger or smaller model
-- you want a provider-specific model variant
+- you want a different endpoint-specific model variant
 
 ### `temperature`
 
@@ -103,12 +83,12 @@ Lower it when:
 
 ### `api_base_url`
 
-Optional explicit provider endpoint.
+Explicit OpenAI-compatible endpoint.
 
 Use this when:
 
 - you are pointing at Ollama locally
-- you need to override a hosted provider default
+- you are targeting a hosted endpoint
 - you are targeting a custom OpenAI-compatible endpoint
 
 ### `timeout_seconds`
@@ -119,15 +99,10 @@ Raise it when:
 
 - a slower hosted model or local model needs more time
 
-### `api_key_env_var`
-
-Optional override for the API key environment variable name.
-
-Most users should leave this as `null` and use the provider default.
-
 ### `prompt_for_api_key_if_missing`
 
-Controls whether the UI is allowed to prompt for a missing API key.
+Controls whether the UI is allowed to prompt for the shared
+`ENGLLM_CHAT_API_KEY`.
 
 Useful when:
 
@@ -263,28 +238,24 @@ Show footer hints for the interactive UI.
 
 ```yaml
 llm:
-  provider: ollama
   model_name: qwen2.5:14b-instruct-q4_K_M
-  api_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434/v1
   temperature: 0.1
 ```
 
-## Hosted Provider
+## Hosted Endpoint
 
 ```yaml
 llm:
-  provider: gemini
   model_name: gemini-2.5-flash
   temperature: 0.1
-  api_base_url: null
-  api_key_env_var: null
+  api_base_url: https://generativelanguage.googleapis.com/v1beta/openai/
 ```
 
 ## Conservative Debugging Config
 
 ```yaml
 llm:
-  provider: mock
   model_name: mock-chat
   temperature: 0.0
   verbose_llm_logging: true
@@ -302,7 +273,7 @@ tool_limits:
 
 ## When to Change Settings
 
-Change provider settings when:
+Change LLM settings when:
 
 - you switch between local and hosted models
 - you need a different endpoint or model

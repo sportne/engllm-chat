@@ -133,8 +133,8 @@ Use the smoke runner directly when you want detailed request/response logging:
 
 ```bash
 .venv/bin/python -m engllm_chat.smoke_chat \
-  --provider ollama \
   --model qwen2.5-coder:7b-instruct-q4_K_M \
+  --base-url http://127.0.0.1:11434/v1 \
   --directory . \
   --require-tool-call \
   --verbose-llm
@@ -144,8 +144,8 @@ For a hosted provider:
 
 ```bash
 .venv/bin/python -m engllm_chat.smoke_chat \
-  --provider gemini \
   --model gemini-2.5-flash \
+  --base-url https://generativelanguage.googleapis.com/v1beta/openai/ \
   --directory . \
   --require-tool-call \
   --verbose-llm

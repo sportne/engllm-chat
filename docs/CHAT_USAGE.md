@@ -23,43 +23,30 @@ During a session, the model can:
 
 All file access is confined to the directory you pass on the command line.
 
-## Supported Providers
+## Runtime Modes
 
-The current chat implementation supports:
+The current chat implementation has two runtime paths:
 
-- `ollama`
-- `mock`
-- `openai`
-- `xai`
-- `anthropic`
-- `gemini`
+- real OpenAI-compatible runs with an explicit `api_base_url`
+- `--mock` for deterministic local testing with no remote model
 
-Use `mock` for offline testing and deterministic behavior. Use `ollama` for a
-real local model. Use the hosted providers when you want to connect to their
-OpenAI-compatible chat endpoints with provider-specific API key defaults.
-
-Hosted-provider defaults:
-
-- `openai`: `OPENAI_API_KEY`, `https://api.openai.com/v1`
-- `xai`: `XAI_API_KEY`, `https://api.x.ai/v1`
-- `anthropic`: `ANTHROPIC_API_KEY`, `https://api.anthropic.com/v1/`
-- `gemini`: `GEMINI_API_KEY`,
-  `https://generativelanguage.googleapis.com/v1beta/openai/`
+You can still point that real runtime at Ollama, OpenAI, xAI, Anthropic,
+Gemini, or another compatible endpoint by choosing the matching `model_name`
+and `api_base_url`.
 
 ## Which Provider Should I Use?
 
 Use:
 
 - `mock` when you want deterministic local testing with no network access
-- `ollama` when you want a real local model and easy experimentation
-- hosted providers when you want stronger remote models or need to compare
-  behavior across provider ecosystems
+- a local Ollama-compatible `/v1` endpoint when you want a real local model
+- a hosted OpenAI-compatible endpoint when you want a stronger remote model
 
 For most development work:
 
 - start with `mock` for deterministic tests
-- use `ollama` for local real-provider workflow checks
-- use a hosted provider when you specifically want to verify hosted behavior
+- use a local endpoint for real workflow checks
+- use a hosted endpoint when you specifically want to verify hosted behavior
 
 ## Setup
 
@@ -70,17 +57,11 @@ make setup-venv
 make install-dev
 ```
 
-If you want to use Ollama, make sure your local Ollama server is running first.
-The default base URL is `http://127.0.0.1:11434`.
-
-If you want to use a hosted provider, export the matching API key before you
-launch the app:
+If you want to use a real provider-backed run, export the shared API key before
+you launch the app:
 
 ```bash
-export OPENAI_API_KEY=...
-export XAI_API_KEY=...
-export ANTHROPIC_API_KEY=...
-export GEMINI_API_KEY=...
+export ENGLLM_CHAT_API_KEY=...
 ```
 
 ## Minimal Chat Config
@@ -89,12 +70,10 @@ Create a standalone chat config file such as `chat.yaml`:
 
 ```yaml
 llm:
-  provider: ollama
   model_name: qwen2.5:7b-instruct
   temperature: 0.1
-  api_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434/v1
   timeout_seconds: 60.0
-  api_key_env_var: null
   prompt_for_api_key_if_missing: true
 
 source_filters:
@@ -161,17 +140,15 @@ CLI overrides take precedence over config values. The most useful overrides are:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M \
   --temperature 0.2 \
-  --api-base-url http://127.0.0.1:11434
+  --api-base-url http://127.0.0.1:11434/v1
 ```
 
-Hosted providers can override the OpenAI-compatible endpoint explicitly:
+Hosted endpoints can override the OpenAI-compatible endpoint explicitly:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider xai \
   --model grok-4-fast-reasoning \
   --api-base-url https://api.x.ai/v1
 ```
@@ -252,12 +229,12 @@ For large files, the model will usually:
 That means it is normal for the model to explore in a few steps before it gives
 you a final answer.
 
-## Mock Provider Example
+## Mock Mode Example
 
-Use the mock provider to test the UI and workflow without a live model:
+Use mock mode to test the UI and workflow without a live model:
 
 ```bash
-engllm-chat . --config chat.yaml --provider mock --model mock-chat
+engllm-chat . --config chat.yaml --mock --model mock-chat
 ```
 
 This is useful for local smoke testing, UI checks, and deterministic debugging.
@@ -268,22 +245,21 @@ Use a local Ollama model:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider ollama \
-  --model qwen2.5:14b-instruct-q4_K_M
+  --model qwen2.5:14b-instruct-q4_K_M \
+  --api-base-url http://127.0.0.1:11434/v1
 ```
 
 If you use a different Ollama endpoint:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider ollama \
   --model qwen2.5:14b-instruct-q4_K_M \
-  --api-base-url http://localhost:11434
+  --api-base-url http://localhost:11434/v1
 ```
 
 ## Repeatable Chat Smoke Test
 
-For a repeatable one-turn workflow check against a configured provider, run:
+For a repeatable one-turn workflow check against a configured endpoint, run:
 
 ```bash
 make smoke-chat
@@ -291,7 +267,7 @@ make smoke-chat
 
 That command:
 
-- uses the real shared provider adapter
+- uses the real shared OpenAI-compatible adapter
 - runs one chat turn through the real schema-first workflow
 - fails if the model does not complete the turn
 - fails if the model answers without making at least one tool call
@@ -301,14 +277,14 @@ For Ollama specifically, this remains available:
 ```bash
 make smoke-ollama-chat \
   OLLAMA_MODEL=qwen2.5-coder:7b-instruct-q4_K_M \
-  OLLAMA_BASE_URL=http://127.0.0.1:11434
+  OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 ```
 
 To point the generic target at Gemini:
 
 ```bash
-export GEMINI_API_KEY=...
-make smoke-chat SMOKE_PROVIDER=gemini SMOKE_MODEL=gemini-2.5-flash
+export ENGLLM_CHAT_API_KEY=...
+make smoke-chat SMOKE_MODEL=gemini-2.5-flash SMOKE_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 ```
 
 If you want the full structured summary, you can also run the module directly.
@@ -317,7 +293,7 @@ Ollama example:
 
 ```bash
 .venv/bin/python -m engllm_chat.smoke_chat \
-  --provider ollama \
+  --base-url http://127.0.0.1:11434/v1 \
   --directory . \
   --require-tool-call \
   --json
@@ -326,10 +302,10 @@ Ollama example:
 Gemini example:
 
 ```bash
-export GEMINI_API_KEY=...
+export ENGLLM_CHAT_API_KEY=...
 .venv/bin/python -m engllm_chat.smoke_chat \
-  --provider gemini \
   --model gemini-2.5-flash \
+  --base-url https://generativelanguage.googleapis.com/v1beta/openai/ \
   --directory . \
   --require-tool-call \
   --verbose-llm
@@ -351,38 +327,38 @@ This checks:
 - `python <artifact>.pex --help`
 - `python <artifact>.pex probe-openai-api --help`
 
-## Hosted Provider Examples
+## Hosted Endpoint Examples
 
 OpenAI:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider openai \
-  --model gpt-5-mini
+  --model gpt-5-mini \
+  --api-base-url https://api.openai.com/v1
 ```
 
 xAI:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider xai \
-  --model grok-4-fast-reasoning
+  --model grok-4-fast-reasoning \
+  --api-base-url https://api.x.ai/v1
 ```
 
 Anthropic:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider anthropic \
-  --model claude-sonnet-4-5
+  --model claude-sonnet-4-5 \
+  --api-base-url https://api.anthropic.com/v1/
 ```
 
 Gemini:
 
 ```bash
 engllm-chat . --config chat.yaml \
-  --provider gemini \
-  --model gemini-2.5-flash
+  --model gemini-2.5-flash \
+  --api-base-url https://generativelanguage.googleapis.com/v1beta/openai/
 ```
 
 ## Token And Context Behavior
@@ -404,11 +380,11 @@ workflow pauses cleanly and asks for continuation instead of running forever.
 
 ## Missing API keys
 
-If a hosted provider fails before startup or during the first request:
+If a real endpoint fails before startup or during the first request:
 
 - check that the expected environment variable is set
-- check `api_key_env_var` in config if you overrode the default
-- confirm the selected provider matches the key you exported
+- make sure `ENGLLM_CHAT_API_KEY` is available
+- confirm the configured `api_base_url` matches the endpoint you intend to use
 
 ## Ollama not reachable
 

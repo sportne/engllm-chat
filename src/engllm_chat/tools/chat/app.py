@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from textual import on, work
@@ -176,12 +175,14 @@ class ChatScreen(Screen[None]):
         root_path: Path,
         config: ChatConfig,
         llm_client: ChatLLMClient | None,
+        mock_mode: bool = False,
         credential_metadata_override: ChatCredentialPromptMetadata | None = None,
     ) -> None:
         super().__init__(id="chat-screen")
         self._root_path = root_path
         self._config = config
         self._llm_client = llm_client
+        self._use_mock = mock_mode
         self._credential_metadata_override = credential_metadata_override
         self._create_chat_llm_client = create_chat_llm_client
         self._session_state = ChatSessionState()
@@ -193,6 +194,7 @@ class ChatScreen(Screen[None]):
         self._footer_session_tokens: int | None = None
         self._footer_active_context_tokens: int | None = None
         self._footer_confidence: float | None = None
+        self._credential_prompt_completed = False
         self._controller = ChatScreenController(self)
 
     def compose(self) -> ComposeResult:
@@ -221,23 +223,13 @@ class ChatScreen(Screen[None]):
         )
         metadata = (
             self._credential_metadata_override
-            or self._config.llm.credential_prompt_metadata()
+            or self._config.llm.credential_prompt_metadata(mock_mode=self._use_mock)
         )
-        env_key_present = bool(
-            metadata.api_key_env_var and os.getenv(metadata.api_key_env_var)
-        )
-        if (
-            self._llm_client is None
-            and metadata.expects_api_key
-            and metadata.prompt_for_api_key_if_missing
-            and not env_key_present
-        ):
+        if self._llm_client is None:
             self.app.push_screen(
                 CredentialModal(metadata),
                 callback=self._controller.handle_credential_submit,
             )
-        elif self._llm_client is None:
-            self._controller.initialize_llm_client()
         self._controller.refresh_footer()
         self.query_one("#composer", ComposerTextArea).focus()
 
@@ -366,12 +358,14 @@ class ChatApp(App[None]):
         root_path: Path,
         config: ChatConfig,
         llm_client: ChatLLMClient | None,
+        mock_mode: bool = False,
         credential_metadata_override: ChatCredentialPromptMetadata | None = None,
     ) -> None:
         super().__init__()
         self._root_path = root_path
         self._config = config
         self._llm_client = llm_client
+        self._mock_mode = mock_mode
         self._credential_metadata_override = credential_metadata_override
 
     def on_mount(self) -> None:
@@ -380,6 +374,7 @@ class ChatApp(App[None]):
                 root_path=self._root_path,
                 config=self._config,
                 llm_client=self._llm_client,
+                mock_mode=self._mock_mode,
                 credential_metadata_override=self._credential_metadata_override,
             )
         )
@@ -389,9 +384,15 @@ def run_chat_app(
     *,
     root_path: Path,
     config: ChatConfig,
+    mock_mode: bool = False,
     llm_client: ChatLLMClient | None = None,
 ) -> int:
     """Launch the first Textual chat app shell."""
 
-    ChatApp(root_path=root_path, config=config, llm_client=llm_client).run()
+    ChatApp(
+        root_path=root_path,
+        config=config,
+        llm_client=llm_client,
+        mock_mode=mock_mode,
+    ).run()
     return 0

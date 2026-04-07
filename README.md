@@ -2,7 +2,7 @@
 
 `engllm-chat` is a terminal chat tool for exploring one directory root with a
 safe, read-only toolset. It provides a Textual chat UI, deterministic
-filesystem tools, support for local and hosted providers, and a small
+filesystem tools, support for local and hosted OpenAI-compatible endpoints, and a small
 OpenAI-compatible API probe utility.
 
 ## Features
@@ -10,7 +10,7 @@ OpenAI-compatible API probe utility.
 - Read-only directory chat rooted at one chosen path
 - Deterministic file listing, search, and bounded read tools
 - Session-aware workflow with continuation boundaries and context trimming
-- Chat providers: `ollama`, `mock`, `openai`, `xai`, `anthropic`, `gemini`
+- One shared OpenAI-compatible runtime path plus `--mock` for deterministic testing
 - Textual interactive UI
 - OpenAI-compatible endpoint probing command
 
@@ -28,10 +28,10 @@ Create a chat config file. This `ollama` example is the quickest way to get
 started locally:
 
 ```yaml
+# Ollama
 llm:
-  provider: ollama
   model_name: qwen2.5:7b-instruct
-  api_base_url: http://127.0.0.1:11434
+  api_base_url: http://127.0.0.1:11434/v1
 ```
 
 Other provider config examples:
@@ -39,8 +39,8 @@ Other provider config examples:
 `mock`
 
 ```yaml
+# Mock
 llm:
-  provider: mock
   model_name: mock-chat
   temperature: 0.0
 ```
@@ -48,8 +48,8 @@ llm:
 `openai`
 
 ```yaml
+# OpenAI
 llm:
-  provider: openai
   model_name: gpt-5-mini
   api_base_url: https://api.openai.com/v1
 ```
@@ -57,8 +57,8 @@ llm:
 `xai`
 
 ```yaml
+# xAI
 llm:
-  provider: xai
   model_name: grok-4-fast-reasoning
   api_base_url: https://api.x.ai/v1
 ```
@@ -66,8 +66,8 @@ llm:
 `anthropic`
 
 ```yaml
+# Anthropic
 llm:
-  provider: anthropic
   model_name: claude-sonnet-4-5
   api_base_url: https://api.anthropic.com/v1/
 ```
@@ -75,8 +75,8 @@ llm:
 `gemini`
 
 ```yaml
+# Gemini
 llm:
-  provider: gemini
   model_name: gemini-2.5-flash
   api_base_url: https://generativelanguage.googleapis.com/v1beta/openai/
 ```
@@ -96,6 +96,12 @@ engllm-chat probe-openai-api --base-url http://localhost:11434/v1 --api-key dumm
 The probe now distinguishes what `engllm-chat` actually needs at runtime from
 broader OpenAI-compatible surface area. For the chat runtime, the important
 checks are Chat Completions and Structured Outputs for the selected text model.
+
+Print example configs from the CLI:
+
+```bash
+engllm-chat config-examples
+```
 
 ## UI Example
 
@@ -146,16 +152,9 @@ For Ollama specifically, the existing shortcut still works:
 make smoke-ollama-chat
 ```
 
-Hosted-provider configs can use the same chat workflow with provider-specific
-defaults:
-
-- `openai` -> `OPENAI_API_KEY` and `https://api.openai.com/v1`
-- `xai` -> `XAI_API_KEY` and `https://api.x.ai/v1`
-- `anthropic` -> `ANTHROPIC_API_KEY` and `https://api.anthropic.com/v1/`
-- `gemini` -> `GEMINI_API_KEY` and
-  `https://generativelanguage.googleapis.com/v1beta/openai/`
-
-You can also override a hosted endpoint explicitly with `--api-base-url`.
+Real provider-backed runs use the shared `ENGLLM_CHAT_API_KEY` environment
+variable and an explicit `api_base_url`. Use `--mock` to bypass the remote
+client entirely for deterministic local testing.
 
 ## Docs
 

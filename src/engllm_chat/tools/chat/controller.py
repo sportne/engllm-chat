@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -54,7 +53,7 @@ class ChatScreenController:
         try:
             self._screen._llm_client = self._screen._create_chat_llm_client(
                 self._screen._config.llm,
-                provider=self._screen._config.llm.provider,
+                use_mock=self._screen._use_mock,
                 model_name=self._screen._config.llm.model_name,
                 api_base_url=self._screen._config.llm.api_base_url,
                 timeout_seconds=self._screen._config.llm.timeout_seconds,
@@ -69,19 +68,13 @@ class ChatScreenController:
     def ensure_llm_client_ready(self) -> bool:
         if self._screen._llm_client is not None:
             return True
-        metadata = (
-            self._screen._credential_metadata_override
-            or self._screen._config.llm.credential_prompt_metadata()
-        )
-        env_key_present = bool(
-            metadata.api_key_env_var and os.getenv(metadata.api_key_env_var)
-        )
-        if (
-            metadata.expects_api_key
-            and metadata.prompt_for_api_key_if_missing
-            and not env_key_present
-            and self._screen._credential_secret is None
-        ):
+        if not self._screen._credential_prompt_completed:
+            metadata = (
+                self._screen._credential_metadata_override
+                or self._screen._config.llm.credential_prompt_metadata(
+                    mock_mode=self._screen._use_mock
+                )
+            )
             self._screen.app.push_screen(
                 CredentialModal(metadata),
                 callback=self.handle_credential_submit,
@@ -240,6 +233,7 @@ class ChatScreenController:
 
     def handle_credential_submit(self, secret_value: str | None) -> None:
         self._screen._credential_secret = secret_value or None
+        self._screen._credential_prompt_completed = True
         self.initialize_llm_client()
         self._screen.query_one("#composer", ComposerTextArea).focus()
 

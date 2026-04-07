@@ -7,36 +7,23 @@ from pathlib import Path
 import pytest
 
 from engllm_chat.domain._models.chat_protocol import ChatMessage, ChatToolResult
-from engllm_chat.domain._models.common import (
-    _PROVIDER_DEFAULT_API_BASE_URLS,
-    _PROVIDER_DEFAULT_API_KEY_ENV_VARS,
-)
+from engllm_chat.domain._models.common import DEFAULT_CHAT_API_KEY_ENV_VAR
 from engllm_chat.domain._models.config import ChatLLMConfig
 from engllm_chat.domain._models.responses import ChatFinalResponse, ChatTokenUsage
 
 
-def test_common_provider_defaults_are_reflected_by_chat_llm_config() -> None:
-    assert _PROVIDER_DEFAULT_API_BASE_URLS["gemini"] is not None
-    assert _PROVIDER_DEFAULT_API_KEY_ENV_VARS["openai"] == "OPENAI_API_KEY"
-
-    config = ChatLLMConfig(provider="gemini", model_name="gemini-2.5-flash")
-    assert config.resolved_api_base_url() == _PROVIDER_DEFAULT_API_BASE_URLS["gemini"]
+def test_common_runtime_defaults_use_shared_api_key_env_var() -> None:
+    config = ChatLLMConfig(model_name="gemini-2.5-flash")
+    assert DEFAULT_CHAT_API_KEY_ENV_VAR == "ENGLLM_CHAT_API_KEY"
     assert (
-        config.resolved_api_key_env_var()
-        == _PROVIDER_DEFAULT_API_KEY_ENV_VARS["gemini"]
+        config.credential_prompt_metadata().api_key_env_var
+        == DEFAULT_CHAT_API_KEY_ENV_VAR
     )
 
 
-def test_config_model_retains_legacy_ollama_base_url_and_prompt_metadata() -> None:
-    config = ChatLLMConfig(
-        provider="ollama",
-        model_name="qwen",
-        ollama_base_url="http://localhost:11434",  # type: ignore[call-arg]
-    )
-
-    metadata = config.credential_prompt_metadata()
-    assert config.api_base_url == "http://localhost:11434"
-    assert metadata.provider == "ollama"
+def test_config_model_can_mark_mock_runs_as_not_requiring_credentials() -> None:
+    config = ChatLLMConfig(model_name="mock-chat")
+    metadata = config.credential_prompt_metadata(mock_mode=True)
     assert metadata.expects_api_key is False
 
 

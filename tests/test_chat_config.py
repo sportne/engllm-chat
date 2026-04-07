@@ -27,11 +27,9 @@ def test_load_chat_config_defaults(tmp_path: Path) -> None:
 
     config = load_chat_config(config_path)
 
-    assert config.llm.provider == "ollama"
     assert config.llm.model_name == "qwen2.5:7b-instruct"
     assert config.llm.api_base_url is None
     assert config.llm.verbose_llm_logging is False
-    assert config.llm.resolved_api_base_url() == "http://127.0.0.1:11434"
     assert config.source_filters.include == []
     assert config.source_filters.exclude == []
     assert config.source_filters.include_hidden is False
@@ -50,11 +48,9 @@ def test_load_chat_config_preserves_credential_prompt_metadata_without_secret(
     config_path.write_text(
         """
 llm:
-  provider: mock
   model_name: mock-chat
   temperature: 0.2
   timeout_seconds: 30.0
-  api_key_env_var: ENGLLM_CHAT_TOKEN
   prompt_for_api_key_if_missing: false
 session:
   max_context_tokens: 1234
@@ -63,11 +59,10 @@ session:
     )
 
     config = load_chat_config(config_path)
-    metadata = config.llm.credential_prompt_metadata()
+    metadata = config.llm.credential_prompt_metadata(mock_mode=True)
 
     assert config.session.max_context_tokens == 1234
-    assert metadata.provider == "mock"
-    assert metadata.api_key_env_var == "ENGLLM_CHAT_TOKEN"
+    assert metadata.api_key_env_var == "ENGLLM_CHAT_API_KEY"
     assert metadata.prompt_for_api_key_if_missing is False
     assert metadata.expects_api_key is False
     assert metadata.mask_input is True
@@ -76,59 +71,24 @@ session:
     assert "api_key" not in config.llm.model_dump()
 
 
-@pytest.mark.parametrize(
-    ("provider", "env_var", "base_url"),
-    [
-        ("openai", "OPENAI_API_KEY", "https://api.openai.com/v1"),
-        ("xai", "XAI_API_KEY", "https://api.x.ai/v1"),
-        ("anthropic", "ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/"),
-        (
-            "gemini",
-            "GEMINI_API_KEY",
-            "https://generativelanguage.googleapis.com/v1beta/openai/",
-        ),
-    ],
-)
-def test_hosted_provider_defaults_are_resolved(
-    provider: str,
-    env_var: str,
-    base_url: str,
-) -> None:
-    config = ChatLLMConfig(provider=provider, model_name="hosted-model")  # type: ignore[arg-type]
-
-    assert config.resolved_api_key_env_var() == env_var
-    assert config.resolved_api_base_url() == base_url
+def test_chat_llm_config_uses_shared_credential_prompt_metadata() -> None:
+    config = ChatLLMConfig(model_name="hosted-model")
 
     metadata = config.credential_prompt_metadata()
-    assert metadata.provider == provider
-    assert metadata.api_key_env_var == env_var
+    assert metadata.api_key_env_var == "ENGLLM_CHAT_API_KEY"
     assert metadata.expects_api_key is True
 
 
-def test_chat_llm_config_prefers_explicit_hosted_provider_overrides() -> None:
+def test_chat_llm_config_keeps_explicit_api_base_url_and_logging_flag() -> None:
     config = ChatLLMConfig(
-        provider="xai",
         model_name="grok-4",
-        api_key_env_var="CUSTOM_XAI_TOKEN",
         api_base_url="https://example.test/v1",
         verbose_llm_logging=True,
     )
 
-    assert config.resolved_api_key_env_var() == "CUSTOM_XAI_TOKEN"
-    assert config.resolved_api_base_url() == "https://example.test/v1"
-    assert config.credential_prompt_metadata().api_key_env_var == "CUSTOM_XAI_TOKEN"
+    assert config.api_base_url == "https://example.test/v1"
+    assert config.credential_prompt_metadata().api_key_env_var == "ENGLLM_CHAT_API_KEY"
     assert config.verbose_llm_logging is True
-
-
-def test_chat_llm_config_migrates_legacy_ollama_base_url_to_api_base_url() -> None:
-    config = ChatLLMConfig(
-        provider="ollama",
-        model_name="qwen",
-        ollama_base_url="http://localhost:11434",  # type: ignore[call-arg]
-    )
-
-    assert config.api_base_url == "http://localhost:11434"
-    assert config.resolved_api_base_url() == "http://localhost:11434"
 
 
 def test_load_chat_config_rejects_validation_errors(tmp_path: Path) -> None:
@@ -189,10 +149,6 @@ session:
         ),
         ({"temperature": -0.1}, "temperature must be between 0.0 and 1.0"),
         ({"timeout_seconds": 0}, "timeout_seconds must be greater than 0"),
-        (
-            {"api_key_env_var": "   "},
-            "api_key_env_var must not be empty when provided",
-        ),
     ],
 )
 def test_chat_llm_config_rejects_invalid_values(

@@ -245,27 +245,11 @@ def test_mock_client_covers_section_payloads_default_payloads_and_chat_turns() -
     assert fallback_turn.finish_reason == "final_response"
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("127.0.0.1:11434", "http://127.0.0.1:11434/v1"),
-        ("http://localhost:11434", "http://localhost:11434/v1"),
-        ("http://localhost:11434/api", "http://localhost:11434/api/v1"),
-        ("http://localhost:11434/custom", "http://localhost:11434/custom/v1"),
-    ],
-)
-def test_ollama_helper_functions_cover_normalization_and_serialization(
-    raw: str,
-    expected: str,
-) -> None:
-    assert openai_compatible_module.normalize_ollama_base_url(raw) == expected
-    assert (
-        openai_compatible_module.normalize_ollama_base_url("http://localhost:11434/v1")
-        == "http://localhost:11434/v1"
-    )
+def test_openai_compatible_helpers_cover_serialization_without_url_rewriting() -> None:
+    assert not hasattr(openai_compatible_module, "normalize_ollama_base_url")
 
 
-def test_ollama_client_uses_openai_compatible_transport(
+def test_openai_compatible_client_uses_explicit_local_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _FakeOpenAIClient:
@@ -301,12 +285,10 @@ def test_ollama_client_uses_openai_compatible_transport(
 
     client = openai_compatible_module.OpenAICompatibleChatLLMClient(
         model_name="qwen",
-        provider_name="ollama",
-        api_key_env_var=None,
-        api_key="ollama",
-        base_url=openai_compatible_module.normalize_ollama_base_url(
-            "http://localhost:11434"
-        ),
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="http://localhost:11434/custom",
     )
     response = client.generate_chat_turn(
         ChatTurnRequest(
@@ -318,8 +300,8 @@ def test_ollama_client_uses_openai_compatible_transport(
 
     assert response.final_response == ChatFinalResponse(answer="Done")
     assert _FakeOpenAIClient.last_init_kwargs == {
-        "api_key": "ollama",
-        "base_url": "http://localhost:11434/v1",
+        "api_key": "secret",
+        "base_url": "http://localhost:11434/custom",
         "timeout": 60.0,
     }
     assert (
@@ -344,10 +326,10 @@ def test_openai_compatible_client_has_no_streaming_entrypoint(
 
     client = openai_compatible_module.OpenAICompatibleChatLLMClient(
         model_name="qwen",
-        provider_name="ollama",
-        api_key_env_var=None,
-        api_key="ollama",
-        base_url=openai_compatible_module.normalize_ollama_base_url(None),
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="http://localhost:11434/v1",
     )
     assert not hasattr(client, "stream_chat_turn")
 

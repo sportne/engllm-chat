@@ -1,4 +1,4 @@
-"""Opt-in local smoke test for the provider-backed chat workflow."""
+"""Opt-in local smoke test for the chat workflow."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from engllm_chat.domain.errors import EngLLMError
 from engllm_chat.domain.models import (
     ChatConfig,
     ChatFinalResponse,
-    ChatProvider,
     ChatTokenUsage,
     ChatToolResult,
 )
@@ -25,16 +24,7 @@ from engllm_chat.tools.chat.workflow import run_chat_turn
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-DEFAULT_PROVIDER: ChatProvider = "ollama"
-DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5:14b-instruct-q4_K_M"
-_SUPPORTED_PROVIDERS: tuple[ChatProvider, ...] = (
-    "ollama",
-    "openai",
-    "xai",
-    "anthropic",
-    "gemini",
-)
 DEFAULT_SMOKE_TEST_QUESTION = (
     "Without relying on prior knowledge, use the repository tools to identify "
     "the file that implements the shared OpenAI-compatible chat provider in "
@@ -45,7 +35,7 @@ DEFAULT_SMOKE_TEST_QUESTION = (
 class ChatSmokeSummary(BaseModel):
     """Serializable summary emitted by the local smoke test."""
 
-    provider: ChatProvider
+    mode: str
     model: str
     base_url: str | None = None
     directory: Path
@@ -73,17 +63,17 @@ def _configure_verbose_llm_logging(enabled: bool) -> None:
     logging.getLogger("engllm_chat.llm.openai_compatible").setLevel(logging.INFO)
 
 
-def _resolve_model(provider: ChatProvider, model_name: str | None) -> str:
+def _resolve_model(model_name: str | None, *, use_mock: bool) -> str:
     if model_name is not None:
         cleaned = model_name.strip()
         if cleaned:
             return cleaned
         raise ChatSmokeTestError("--model must not be empty when provided")
 
-    if provider == "ollama":
-        return DEFAULT_OLLAMA_MODEL
+    if use_mock:
+        return "mock-chat"
 
-    raise ChatSmokeTestError(f"--model is required for provider '{provider}'")
+    return DEFAULT_OLLAMA_MODEL
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -91,12 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m engllm_chat.smoke_chat",
         description="Run a real one-turn chat workflow smoke test.",
     )
-    parser.add_argument(
-        "--provider",
-        choices=list(_SUPPORTED_PROVIDERS),
-        default=DEFAULT_PROVIDER,
-        help=f"Chat provider to test. Default: {DEFAULT_PROVIDER}",
-    )
+    parser.add_argument("--mock", action="store_true")
     parser.add_argument(
         "--directory",
         type=Path,
@@ -108,7 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Provider model name. Defaults to the Ollama smoke-test model for "
-            "provider=ollama. Required for hosted providers."
+            "real OpenAI-compatible runs. Defaults to mock-chat for --mock."
         ),
     )
     parser.add_argument(
@@ -123,8 +108,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--api-key",
         default=None,
         help=(
-            "Override the provider API key. If omitted, hosted providers use their "
-            "default environment variable."
+            "Override the provider API key. If omitted, real runs use "
+            "ENGLLM_CHAT_API_KEY."
         ),
     )
     parser.add_argument(
@@ -187,19 +172,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _build_config(args: argparse.Namespace) -> ChatConfig:
-    provider: ChatProvider = args.provider
-    model_name = _resolve_model(provider, args.model)
-    base_url = args.base_url
-    if provider == "ollama" and base_url is None:
-        base_url = DEFAULT_OLLAMA_BASE_URL
+    model_name = _resolve_model(args.model, use_mock=args.mock)
+    if not args.mock and args.base_url is None:
+        raise ChatSmokeTestError("--base-url is required unless --mock is used")
 
     return ChatConfig.model_validate(
         {
             "llm": {
-                "provider": provider,
                 "model_name": model_name,
                 "temperature": args.temperature,
-                "api_base_url": base_url,
+                "api_base_url": args.base_url,
                 "timeout_seconds": args.timeout_seconds,
                 "verbose_llm_logging": args.verbose_llm,
             },
@@ -214,7 +196,11 @@ def _build_config(args: argparse.Namespace) -> ChatConfig:
 
 def _run_smoke_test(args: argparse.Namespace) -> ChatSmokeSummary:
     config = _build_config(args)
-    llm_client = create_chat_llm_client(config.llm, api_key=args.api_key)
+    llm_client = create_chat_llm_client(
+        config.llm,
+        use_mock=args.mock,
+        api_key=args.api_key,
+    )
     root_path = args.directory.resolve()
     turn_result = run_chat_turn(
         user_message=args.question,
@@ -224,7 +210,7 @@ def _run_smoke_test(args: argparse.Namespace) -> ChatSmokeSummary:
         llm_client=llm_client,
     )
     return ChatSmokeSummary(
-        provider=config.llm.provider,
+        mode="mock" if args.mock else "openai-compatible",
         model=config.llm.model_name,
         base_url=config.llm.api_base_url,
         directory=root_path,
@@ -280,7 +266,7 @@ def _validate_expectations(
 
 def _print_human_summary(summary: ChatSmokeSummary) -> None:
     print("Chat smoke test passed.")
-    print(f"Provider: {summary.provider}")
+    print(f"Mode: {summary.mode}")
     print(f"Directory: {summary.directory}")
     print(f"Model: {summary.model}")
     if summary.base_url is not None:

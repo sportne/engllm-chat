@@ -34,7 +34,6 @@ from engllm_chat.llm._openai_compatible.serialization import (
 from engllm_chat.llm._openai_compatible.transport import (
     DEFAULT_OPENAI,
     build_openai_client,
-    normalize_ollama_base_url,
 )
 from engllm_chat.llm.base import ChatToolDefinition, ChatTurnRequest, ChatTurnResponse
 
@@ -45,7 +44,6 @@ __all__ = [
     "OpenAI",
     "OpenAICompatibleChatLLMClient",
     "ChatToolDefinition",
-    "normalize_ollama_base_url",
     "_serialize_chat_message",
     "_build_chat_turn_action_model",
     "_extract_message_text",
@@ -64,7 +62,7 @@ class OpenAICompatibleChatLLMClient:
         self,
         model_name: str,
         provider_name: str,
-        api_key_env_var: str | None,
+        api_key_env_var: str,
         base_url: str | None,
         timeout_seconds: float = 60.0,
         api_key: str | None = None,

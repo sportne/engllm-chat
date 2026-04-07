@@ -1,15 +1,13 @@
-"""Provider and runtime configuration models for the chat project."""
+"""Runtime configuration models for the chat project."""
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 
 from .common import (
-    _PROVIDER_DEFAULT_API_BASE_URLS,
-    _PROVIDER_DEFAULT_API_KEY_ENV_VARS,
-    ChatProvider,
+    DEFAULT_CHAT_API_KEY_ENV_VAR,
     DomainModel,
 )
 
@@ -17,8 +15,7 @@ from .common import (
 class ChatCredentialPromptMetadata(DomainModel):
     """UI-safe credential prompt policy without any persisted secret value."""
 
-    provider: str
-    api_key_env_var: str | None = None
+    api_key_env_var: str = DEFAULT_CHAT_API_KEY_ENV_VAR
     prompt_for_api_key_if_missing: bool = True
     expects_api_key: bool = False
     secret_kind: Literal["api_key"] = "api_key"
@@ -28,29 +25,14 @@ class ChatCredentialPromptMetadata(DomainModel):
 
 
 class ChatLLMConfig(DomainModel):
-    """Standalone chat-provider configuration."""
+    """Standalone chat runtime configuration."""
 
-    provider: ChatProvider = "ollama"
     model_name: str = "qwen2.5:7b-instruct"
     temperature: float = 0.1
     api_base_url: str | None = None
     timeout_seconds: float = 60.0
-    api_key_env_var: str | None = None
     prompt_for_api_key_if_missing: bool = True
     verbose_llm_logging: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_ollama_base_url(cls, value: object) -> object:
-        # This keeps older local configs working while the rest of the project
-        # consistently talks about provider-neutral API base URLs.
-        if not isinstance(value, dict):
-            return value
-        if "api_base_url" not in value and "ollama_base_url" in value:
-            migrated = dict(value)
-            migrated["api_base_url"] = migrated.pop("ollama_base_url")
-            return migrated
-        return value
 
     @field_validator("model_name")
     @classmethod
@@ -84,37 +66,16 @@ class ChatLLMConfig(DomainModel):
             raise ValueError("timeout_seconds must be greater than 0")
         return value
 
-    @field_validator("api_key_env_var")
-    @classmethod
-    def validate_api_key_env_var(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("api_key_env_var must not be empty when provided")
-        return cleaned
-
-    def credential_prompt_metadata(self) -> ChatCredentialPromptMetadata:
+    def credential_prompt_metadata(
+        self, *, mock_mode: bool = False
+    ) -> ChatCredentialPromptMetadata:
         """Return UI-safe credential-prompt metadata derived from config."""
 
-        # The UI gets prompt policy and env-var names, but never receives a
-        # persisted secret value from the config layer.
         return ChatCredentialPromptMetadata(
-            provider=self.provider,
-            api_key_env_var=self.resolved_api_key_env_var(),
+            api_key_env_var=DEFAULT_CHAT_API_KEY_ENV_VAR,
             prompt_for_api_key_if_missing=self.prompt_for_api_key_if_missing,
-            expects_api_key=self.provider not in {"ollama", "mock"},
+            expects_api_key=not mock_mode,
         )
-
-    def resolved_api_key_env_var(self) -> str | None:
-        """Return the explicit or provider-default API-key env var."""
-
-        return self.api_key_env_var or _PROVIDER_DEFAULT_API_KEY_ENV_VARS[self.provider]
-
-    def resolved_api_base_url(self) -> str | None:
-        """Return the explicit or provider-default hosted API base URL."""
-
-        return self.api_base_url or _PROVIDER_DEFAULT_API_BASE_URLS[self.provider]
 
 
 class ChatSourceFilters(DomainModel):

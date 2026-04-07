@@ -25,10 +25,7 @@ from engllm_chat.llm.base import (
 )
 from engllm_chat.llm.factory import create_chat_llm_client
 from engllm_chat.llm.mock import MockLLMClient
-from engllm_chat.llm.openai_compatible import (
-    OpenAICompatibleChatLLMClient,
-    normalize_ollama_base_url,
-)
+from engllm_chat.llm.openai_compatible import OpenAICompatibleChatLLMClient
 from engllm_chat.probe_openai_api import main as probe_main
 
 
@@ -187,60 +184,53 @@ def test_mock_client_supports_chat_turns() -> None:
     assert turn.finish_reason == "tool_calls"
 
 
-def test_create_chat_llm_client_supports_mock_and_ollama() -> None:
+def test_create_chat_llm_client_supports_mock_and_openai_compatible() -> None:
     _FakeOpenAIClient.reset()
-    config = ChatLLMConfig(provider="mock", model_name="mock-chat")
-    assert isinstance(create_chat_llm_client(config), MockLLMClient)
+    config = ChatLLMConfig(model_name="mock-chat")
+    assert isinstance(create_chat_llm_client(config, use_mock=True), MockLLMClient)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(
             "engllm_chat.llm.openai_compatible.OpenAI",
             _FakeOpenAIClient,
         )
-        ollama_client = create_chat_llm_client(
-            ChatLLMConfig(provider="ollama", model_name="qwen"),
-            provider="ollama",
+        compatible_client = create_chat_llm_client(
+            ChatLLMConfig(model_name="qwen", api_base_url="http://localhost:11434/v1"),
             model_name="qwen3",
-            api_base_url="http://localhost:11434",
+            api_base_url="http://localhost:11434/v1",
             timeout_seconds=12.0,
+            api_key="secret",
         )
-        assert isinstance(ollama_client, OpenAICompatibleChatLLMClient)
+        assert isinstance(compatible_client, OpenAICompatibleChatLLMClient)
         assert _FakeOpenAIClient.last_init_kwargs == {
-            "api_key": "ollama",
+            "api_key": "secret",
             "base_url": "http://localhost:11434/v1",
             "timeout": 12.0,
         }
 
-    with pytest.raises(LLMError, match="Unsupported chat LLM provider"):
-        create_chat_llm_client(config, provider="bad-provider")  # type: ignore[arg-type]
+    with pytest.raises(LLMError, match="api_base_url is required"):
+        create_chat_llm_client(ChatLLMConfig(model_name="qwen"))
 
 
 @pytest.mark.parametrize(
-    ("provider", "env_var", "base_url"),
+    "base_url",
     [
-        ("openai", "OPENAI_API_KEY", "https://api.openai.com/v1"),
-        ("xai", "XAI_API_KEY", "https://api.x.ai/v1"),
-        ("anthropic", "ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/"),
-        (
-            "gemini",
-            "GEMINI_API_KEY",
-            "https://generativelanguage.googleapis.com/v1beta/openai/",
-        ),
+        "https://api.openai.com/v1",
+        "https://api.x.ai/v1",
+        "https://api.anthropic.com/v1/",
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
     ],
 )
-def test_create_chat_llm_client_supports_hosted_openai_compatible_providers(
+def test_create_chat_llm_client_supports_explicit_openai_compatible_endpoints(
     monkeypatch: pytest.MonkeyPatch,
-    provider: str,
-    env_var: str,
     base_url: str,
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
-    monkeypatch.setenv(env_var, "test-token")
+    monkeypatch.setenv("ENGLLM_CHAT_API_KEY", "test-token")
     _FakeOpenAIClient.reset()
 
     client = create_chat_llm_client(
-        ChatLLMConfig(provider=provider, model_name="hosted-model"),  # type: ignore[arg-type]
-        provider=provider,  # type: ignore[arg-type]
+        ChatLLMConfig(model_name="hosted-model", api_base_url=base_url),
         model_name="override-model",
         timeout_seconds=12.0,
     )
@@ -257,11 +247,11 @@ def test_create_chat_llm_client_supports_hosted_base_url_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
-    monkeypatch.setenv("OPENAI_API_KEY", "test-token")
+    monkeypatch.setenv("ENGLLM_CHAT_API_KEY", "test-token")
     _FakeOpenAIClient.reset()
 
     client = create_chat_llm_client(
-        ChatLLMConfig(provider="openai", model_name="gpt-test"),
+        ChatLLMConfig(model_name="gpt-test", api_base_url="https://api.openai.com/v1"),
         api_base_url="https://proxy.example/v1",
     )
 
@@ -274,13 +264,13 @@ def test_openai_compatible_client_requires_configured_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ENGLLM_CHAT_API_KEY", raising=False)
 
-    with pytest.raises(LLMError, match="OPENAI_API_KEY is not configured"):
+    with pytest.raises(LLMError, match="ENGLLM_CHAT_API_KEY is not configured"):
         OpenAICompatibleChatLLMClient(
             model_name="gpt-test",
             provider_name="openai",
-            api_key_env_var="OPENAI_API_KEY",
+            api_key_env_var="ENGLLM_CHAT_API_KEY",
             base_url="https://api.openai.com/v1",
         )
 
@@ -294,7 +284,7 @@ def test_openai_compatible_client_requires_sdk_dependencies(
         OpenAICompatibleChatLLMClient(
             model_name="gpt-test",
             provider_name="openai",
-            api_key_env_var=None,
+            api_key_env_var="ENGLLM_CHAT_API_KEY",
             api_key="secret",
             base_url="https://api.openai.com/v1",
         )
@@ -323,7 +313,7 @@ def test_openai_compatible_generate_chat_turn_parses_final_response(
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )
@@ -392,7 +382,7 @@ def test_openai_compatible_generate_chat_turn_retries_sdk_schema_validation_erro
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="gemini",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
@@ -443,8 +433,8 @@ def test_openai_compatible_verbose_logging_emits_request_and_response_messages(
 
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
-        provider_name="openai",
-        api_key_env_var=None,
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
         verbose_logging=True,
@@ -460,9 +450,11 @@ def test_openai_compatible_verbose_logging_emits_request_and_response_messages(
         )
 
     log_text = caplog.text
-    assert "LLM request -> provider=openai model=gpt-test attempt=1" in log_text
+    assert (
+        "LLM request -> provider=openai-compatible model=gpt-test attempt=1" in log_text
+    )
     assert '"content": "hello from user"' in log_text
-    assert "LLM response <- provider=openai model=gpt-test" in log_text
+    assert "LLM response <- provider=openai-compatible model=gpt-test" in log_text
     assert '"answer": "Hosted done"' in log_text
 
 
@@ -489,7 +481,7 @@ def test_openai_compatible_generate_chat_turn_parses_tool_calls(
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="xai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.x.ai/v1",
     )
@@ -521,7 +513,9 @@ def test_openai_compatible_generate_chat_turn_parses_tool_calls(
     assert "tool_request" in response.raw_text
 
 
-def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
+def test_openai_compatible_generate_chat_turn_preserves_explicit_local_base_url(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
     _FakeOpenAIClient.queued_parse_responses = [
@@ -540,10 +534,10 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
     ]
     client = OpenAICompatibleChatLLMClient(
         model_name="qwen",
-        provider_name="ollama",
-        api_key_env_var=None,
-        api_key="ollama",
-        base_url=normalize_ollama_base_url("http://localhost:11434"),
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="http://localhost:11434/custom",
     )
     response = client.generate_chat_turn(
         ChatTurnRequest(
@@ -568,15 +562,20 @@ def test_ollama_generate_chat_turn_parses_final_response(monkeypatch) -> None:
     assert response.token_usage is not None
     assert response.token_usage.total_tokens == 10
     assert _FakeOpenAIClient.last_init_kwargs is not None
-    assert _FakeOpenAIClient.last_init_kwargs["base_url"] == "http://localhost:11434/v1"
-    assert _FakeOpenAIClient.last_init_kwargs["api_key"] == "ollama"
+    assert (
+        _FakeOpenAIClient.last_init_kwargs["base_url"]
+        == "http://localhost:11434/custom"
+    )
+    assert _FakeOpenAIClient.last_init_kwargs["api_key"] == "secret"
     assert (
         "action"
         in _FakeOpenAIClient.captured_parse_payloads[-1]["response_format"].model_fields
     )
 
 
-def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
+def test_openai_compatible_generate_chat_turn_parses_tool_calls_for_local_endpoint(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
     _FakeOpenAIClient.reset()
     _FakeOpenAIClient.queued_parse_responses = [
@@ -595,10 +594,10 @@ def test_ollama_generate_chat_turn_parses_tool_calls(monkeypatch) -> None:
     ]
     client = OpenAICompatibleChatLLMClient(
         model_name="qwen",
-        provider_name="ollama",
-        api_key_env_var=None,
-        api_key="ollama",
-        base_url=normalize_ollama_base_url(None),
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="http://localhost:11434/v1",
     )
     response = client.generate_chat_turn(
         ChatTurnRequest(
@@ -648,7 +647,7 @@ def test_openai_compatible_generate_chat_turn_retries_after_schema_failure(
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )
@@ -694,7 +693,7 @@ def test_openai_compatible_generate_chat_turn_parses_json_fenced_raw_content(
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )
@@ -728,7 +727,7 @@ def test_openai_compatible_generate_chat_turn_raises_after_three_schema_failures
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )
@@ -762,7 +761,7 @@ def test_openai_compatible_generate_chat_turn_surfaces_request_and_protocol_erro
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )
@@ -788,7 +787,7 @@ def test_openai_compatible_generate_chat_turn_surfaces_request_and_protocol_erro
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )
@@ -816,7 +815,7 @@ def test_openai_compatible_generate_chat_turn_surfaces_request_and_protocol_erro
     client = OpenAICompatibleChatLLMClient(
         model_name="gpt-test",
         provider_name="openai",
-        api_key_env_var=None,
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
         base_url="https://api.openai.com/v1",
     )

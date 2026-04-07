@@ -14,6 +14,41 @@ from engllm_chat.domain.errors import EngLLMError
 from engllm_chat.domain.models import ChatConfig
 from engllm_chat.probe_openai_api import main as probe_openai_api_main
 
+_CONFIG_EXAMPLES = """# Shared runtime defaults
+# - Real provider-backed runs use ENGLLM_CHAT_API_KEY
+# - Real provider-backed runs require an explicit api_base_url
+# - Use --mock to run the deterministic mock client instead
+
+# Ollama
+llm:
+  model_name: qwen2.5:7b-instruct
+  api_base_url: http://127.0.0.1:11434/v1
+
+# OpenAI
+llm:
+  model_name: gpt-5-mini
+  api_base_url: https://api.openai.com/v1
+
+# xAI
+llm:
+  model_name: grok-4-fast-reasoning
+  api_base_url: https://api.x.ai/v1
+
+# Anthropic
+llm:
+  model_name: claude-sonnet-4-5
+  api_base_url: https://api.anthropic.com/v1/
+
+# Gemini
+llm:
+  model_name: gemini-2.5-flash
+  api_base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+
+# Mock
+llm:
+  model_name: mock-chat
+"""
+
 
 def _resolve_temperature(raw_value: float | None, default: float) -> float:
     resolved = default if raw_value is None else raw_value
@@ -39,8 +74,6 @@ def _resolve_chat_config(args: argparse.Namespace) -> ChatConfig:
     raw.setdefault("session", {})
     raw.setdefault("tool_limits", {})
 
-    if args.provider is not None:
-        raw["llm"]["provider"] = args.provider
     if args.model is not None:
         raw["llm"]["model_name"] = args.model
     raw["llm"]["temperature"] = _resolve_temperature(
@@ -80,6 +113,7 @@ def _launch_chat_app(
     *,
     root_path: Path,
     config: ChatConfig,
+    mock_mode: bool = False,
     llm_client: Any | None = None,
 ) -> int:
     from engllm_chat.tools.chat.app import run_chat_app
@@ -87,6 +121,7 @@ def _launch_chat_app(
     return run_chat_app(
         root_path=root_path,
         config=config,
+        mock_mode=mock_mode,
         llm_client=llm_client,
     )
 
@@ -97,7 +132,13 @@ def _run_chat_interactive(args: argparse.Namespace) -> int:
     return _launch_chat_app(
         root_path=args.directory.resolve(),
         config=chat_config,
+        mock_mode=args.mock,
     )
+
+
+def _run_config_examples(_args: argparse.Namespace) -> int:
+    print(_CONFIG_EXAMPLES)
+    return 0
 
 
 def _run_probe_openai_api(args: argparse.Namespace) -> int:
@@ -130,10 +171,7 @@ def _run_probe_openai_api(args: argparse.Namespace) -> int:
 def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("directory", type=Path)
     parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument(
-        "--provider",
-        choices=["ollama", "mock", "openai", "xai", "anthropic", "gemini"],
-    )
+    parser.add_argument("--mock", action="store_true")
     parser.add_argument("--model", type=str)
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--api-base-url", type=str)
@@ -189,6 +227,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     if raw_args and raw_args[0] == "probe-openai-api":
         parser = _build_probe_parser()
+        parse_args = raw_args[1:]
+    elif raw_args and raw_args[0] == "config-examples":
+        parser = argparse.ArgumentParser(
+            prog="engllm-chat config-examples",
+            description="Print example chat configuration files and runtime defaults.",
+        )
+        parser.set_defaults(run=_run_config_examples)
         parse_args = raw_args[1:]
     else:
         parser = build_parser()

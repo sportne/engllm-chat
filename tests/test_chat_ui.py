@@ -378,7 +378,7 @@ def test_chat_app_shows_credential_modal_when_prompt_metadata_requires_it(
         del config
         created_api_keys.append(kwargs.get("api_key"))
         if kwargs.get("api_key") != "secret":
-            raise LLMError("OPENAI_API_KEY is not configured")
+            raise LLMError("ENGLLM_CHAT_API_KEY is not configured")
         return MockLLMClient()
 
     monkeypatch.setattr(
@@ -392,8 +392,7 @@ def test_chat_app_shows_credential_modal_when_prompt_metadata_requires_it(
             config=ChatConfig(),
             llm_client=None,
             credential_metadata_override=ChatCredentialPromptMetadata(
-                provider="openai",
-                api_key_env_var="OPENAI_API_KEY",
+                api_key_env_var="ENGLLM_CHAT_API_KEY",
                 prompt_for_api_key_if_missing=True,
                 expects_api_key=True,
             ),
@@ -424,7 +423,7 @@ def test_chat_app_credential_modal_cancel_dismisses_without_secret(
     def _fake_create_chat_llm_client(config, **kwargs):
         del config
         created_api_keys.append(kwargs.get("api_key"))
-        raise LLMError("OPENAI_API_KEY is not configured")
+        raise LLMError("ENGLLM_CHAT_API_KEY is not configured")
 
     monkeypatch.setattr(
         "engllm_chat.tools.chat.app.create_chat_llm_client",
@@ -437,8 +436,7 @@ def test_chat_app_credential_modal_cancel_dismisses_without_secret(
             config=ChatConfig(),
             llm_client=None,
             credential_metadata_override=ChatCredentialPromptMetadata(
-                provider="openai",
-                api_key_env_var="OPENAI_API_KEY",
+                api_key_env_var="ENGLLM_CHAT_API_KEY",
                 prompt_for_api_key_if_missing=True,
                 expects_api_key=True,
             ),
@@ -454,7 +452,8 @@ def test_chat_app_credential_modal_cancel_dismisses_without_secret(
             assert chat_screen._llm_client is None
             transcript_texts = _transcript_texts(app)
             assert any(
-                "OPENAI_API_KEY is not configured" in text for text in transcript_texts
+                "ENGLLM_CHAT_API_KEY is not configured" in text
+                for text in transcript_texts
             )
             app.exit()
             await pilot.pause()
@@ -463,7 +462,7 @@ def test_chat_app_credential_modal_cancel_dismisses_without_secret(
     assert created_api_keys == [None]
 
 
-def test_chat_app_skips_credential_modal_when_env_key_is_present(
+def test_chat_app_still_shows_credential_modal_when_env_key_is_present(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -474,7 +473,7 @@ def test_chat_app_skips_credential_modal_when_env_key_is_present(
         created_api_keys.append(kwargs.get("api_key"))
         return MockLLMClient()
 
-    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+    monkeypatch.setenv("ENGLLM_CHAT_API_KEY", "env-secret")
     monkeypatch.setattr(
         "engllm_chat.tools.chat.app.create_chat_llm_client",
         _fake_create_chat_llm_client,
@@ -486,23 +485,60 @@ def test_chat_app_skips_credential_modal_when_env_key_is_present(
             config=ChatConfig(),
             llm_client=None,
             credential_metadata_override=ChatCredentialPromptMetadata(
-                provider="openai",
-                api_key_env_var="OPENAI_API_KEY",
+                api_key_env_var="ENGLLM_CHAT_API_KEY",
                 prompt_for_api_key_if_missing=True,
                 expects_api_key=True,
             ),
         )
         async with app.run_test() as pilot:
             await pilot.pause()
+            app.query_one(CredentialModal)
+            await pilot.click("#credential-submit")
+            await pilot.pause()
             assert isinstance(app.screen, ChatScreen)
             assert app.screen._credential_secret is None
             assert isinstance(app.screen._llm_client, MockLLMClient)
-            assert not app.screen.query(CredentialModal)
             app.exit()
             await pilot.pause()
 
     asyncio.run(_run())
     assert created_api_keys == [None]
+
+
+def test_chat_app_shows_credential_modal_for_mock_mode_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    created_use_mock: list[bool] = []
+
+    def _fake_create_chat_llm_client(config, **kwargs):
+        del config
+        created_use_mock.append(bool(kwargs.get("use_mock")))
+        return MockLLMClient()
+
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.app.create_chat_llm_client",
+        _fake_create_chat_llm_client,
+    )
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=None,
+            mock_mode=True,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one(CredentialModal)
+            await pilot.click("#credential-submit")
+            await pilot.pause()
+            assert isinstance(app.screen._llm_client, MockLLMClient)
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+    assert created_use_mock == [True]
 
 
 def test_chat_app_stop_action_visibility_and_busy_send_interrupt_modal(

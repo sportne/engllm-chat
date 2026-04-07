@@ -12,7 +12,6 @@ def _fake_chat_config() -> ChatConfig:
     return ChatConfig.model_validate(
         {
             "llm": {
-                "provider": "ollama",
                 "model_name": "qwen",
                 "temperature": 0.1,
                 "api_base_url": "http://127.0.0.1:11434",
@@ -35,9 +34,10 @@ def test_default_cli_launches_app_with_overrides(monkeypatch, tmp_path: Path) ->
         lambda enabled: logging_flags.append(enabled),
     )
 
-    def _fake_launch_chat_app(*, root_path, config, llm_client=None):
+    def _fake_launch_chat_app(*, root_path, config, mock_mode=False, llm_client=None):
         captured["root_path"] = root_path
         captured["config"] = config
+        captured["mock_mode"] = mock_mode
         captured["llm_client"] = llm_client
         return 0
 
@@ -48,8 +48,6 @@ def test_default_cli_launches_app_with_overrides(monkeypatch, tmp_path: Path) ->
             str(tmp_path),
             "--config",
             str(tmp_path / "chat.yaml"),
-            "--provider",
-            "xai",
             "--model",
             "grok-4-fast",
             "--temperature",
@@ -67,7 +65,6 @@ def test_default_cli_launches_app_with_overrides(monkeypatch, tmp_path: Path) ->
     assert rc == 0
     resolved = captured["config"]
     assert isinstance(resolved, ChatConfig)
-    assert resolved.llm.provider == "xai"
     assert resolved.llm.model_name == "grok-4-fast"
     assert resolved.llm.temperature == 0.3
     assert resolved.llm.api_base_url == "https://proxy.example/v1"
@@ -75,6 +72,7 @@ def test_default_cli_launches_app_with_overrides(monkeypatch, tmp_path: Path) ->
     assert resolved.session.max_context_tokens == 1234
     assert resolved.tool_limits.max_file_size_characters == 4096
     assert captured["root_path"] == tmp_path.resolve()
+    assert captured["mock_mode"] is False
     assert captured["llm_client"] is None
     assert logging_flags == [True]
 
@@ -114,9 +112,10 @@ def test_interactive_alias_still_launches_default_chat_flow(
         cli_module, "load_chat_config", lambda _path: _fake_chat_config()
     )
 
-    def _fake_launch_chat_app(*, root_path, config, llm_client=None):
+    def _fake_launch_chat_app(*, root_path, config, mock_mode=False, llm_client=None):
         captured["root_path"] = root_path
         captured["config"] = config
+        captured["mock_mode"] = mock_mode
         captured["llm_client"] = llm_client
         return 0
 
@@ -126,7 +125,41 @@ def test_interactive_alias_still_launches_default_chat_flow(
 
     assert rc == 0
     assert captured["root_path"] == tmp_path.resolve()
+    assert captured["mock_mode"] is False
     assert captured["llm_client"] is None
+
+
+def test_default_cli_supports_mock_mode(monkeypatch, tmp_path: Path) -> None:
+    cli_module = __import__("engllm_chat.cli.main", fromlist=["main"])
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli_module, "load_chat_config", lambda _path: _fake_chat_config()
+    )
+
+    def _fake_launch_chat_app(*, root_path, config, mock_mode=False, llm_client=None):
+        captured["root_path"] = root_path
+        captured["config"] = config
+        captured["mock_mode"] = mock_mode
+        captured["llm_client"] = llm_client
+        return 0
+
+    monkeypatch.setattr(cli_module, "_launch_chat_app", _fake_launch_chat_app)
+
+    rc = main([".", "--config", str(tmp_path / "chat.yaml"), "--mock"])
+
+    assert rc == 0
+    assert captured["mock_mode"] is True
+
+
+def test_config_examples_subcommand_prints_examples(capsys) -> None:
+    rc = main(["config-examples"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "ENGLLM_CHAT_API_KEY" in captured.out
+    assert "# Ollama" in captured.out
+    assert "# Mock" in captured.out
 
 
 def test_probe_subcommand_delegates_to_probe_module(monkeypatch) -> None:
