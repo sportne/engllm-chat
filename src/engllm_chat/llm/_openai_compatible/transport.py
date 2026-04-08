@@ -25,8 +25,8 @@ def resolve_api_token(
 ) -> str:
     """Resolve the API token for one OpenAI-compatible endpoint."""
 
-    api_token = api_key or os.getenv(api_key_env_var)
-    if not api_token:
+    api_token = api_key if api_key is not None else os.getenv(api_key_env_var)
+    if api_token is None:
         raise LLMError(f"{api_key_env_var} is not configured")
     return api_token
 

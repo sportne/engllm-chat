@@ -21,7 +21,7 @@ _CONFIG_EXAMPLES = """# Shared runtime defaults
 
 # Ollama
 llm:
-  model_name: qwen2.5:7b-instruct
+  model_name: qwen2.5-coder:7b-instruct-q4_K_M
   api_base_url: http://127.0.0.1:11434/v1
 
 # OpenAI

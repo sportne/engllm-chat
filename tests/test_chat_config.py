@@ -27,7 +27,7 @@ def test_load_chat_config_defaults(tmp_path: Path) -> None:
 
     config = load_chat_config(config_path)
 
-    assert config.llm.model_name == "qwen2.5:7b-instruct"
+    assert config.llm.model_name == "qwen2.5-coder:7b-instruct-q4_K_M"
     assert config.llm.api_base_url is None
     assert config.llm.verbose_llm_logging is False
     assert config.source_filters.include == []

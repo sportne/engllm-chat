@@ -27,7 +27,7 @@ class ChatCredentialPromptMetadata(DomainModel):
 class ChatLLMConfig(DomainModel):
     """Standalone chat runtime configuration."""
 
-    model_name: str = "qwen2.5:7b-instruct"
+    model_name: str = "qwen2.5-coder:7b-instruct-q4_K_M"
     temperature: float = 0.1
     api_base_url: str | None = None
     timeout_seconds: float = 60.0

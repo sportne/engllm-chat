@@ -304,7 +304,7 @@ class ChatScreenController:
         )
 
     def handle_credential_submit(self, secret_value: str | None) -> None:
-        self._screen._credential_secret = secret_value or None
+        self._screen._credential_secret = secret_value
         self._screen._credential_prompt_completed = True
         self.initialize_llm_client()
         self._screen.query_one("#composer", ComposerTextArea).focus()
@@ -466,11 +466,14 @@ class ChatScreenController:
                 callback=self.handle_interrupt_confirmation,
             )
             return
+
+        if self.handle_inline_command(raw_draft):
+            self.clear_composer()
+            return
+
         if not self.ensure_llm_client_ready():
             return
         self.clear_composer()
-        if self.handle_inline_command(raw_draft):
-            return
         self.append_transcript("user", raw_draft)
         self._screen._active_assistant_entry = None
         self._screen._busy = True

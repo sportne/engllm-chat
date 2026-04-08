@@ -147,7 +147,7 @@ Example v1 chat config:
 ```yaml
 llm:
   provider: ollama
-  model_name: qwen2.5:7b-instruct
+  model_name: qwen2.5-coder:7b-instruct-q4_K_M
   temperature: 0.1
   api_base_url: http://127.0.0.1:11434
   api_base_url: null

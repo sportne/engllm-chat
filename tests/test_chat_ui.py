@@ -497,13 +497,13 @@ def test_chat_app_still_shows_credential_modal_when_env_key_is_present(
             await pilot.click("#credential-submit")
             await pilot.pause()
             assert isinstance(app.screen, ChatScreen)
-            assert app.screen._credential_secret is None
+            assert app.screen._credential_secret == ""
             assert isinstance(app.screen._llm_client, MockLLMClient)
             app.exit()
             await pilot.pause()
 
     asyncio.run(_run())
-    assert created_api_keys == [None]
+    assert created_api_keys == [""]
 
 
 def test_chat_app_shows_credential_modal_for_mock_mode_startup(
