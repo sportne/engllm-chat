@@ -566,6 +566,64 @@ def _probe_chat_completions_structured_output(
     return 200, "returned schema-valid JSON payload"
 
 
+def _probe_beta_chat_completions_parse(
+    client: Any, context: ProbeContext
+) -> tuple[int | None, str]:
+    """Probe ``client.beta.chat.completions.parse``.
+
+    This is the exact SDK method that ``engllm-chat`` uses at runtime to
+    enforce Pydantic-validated structured output.  It exercises the beta
+    namespace path rather than the plain ``response_format=json_schema``
+    variant tested by ``_probe_chat_completions_structured_output``.
+    """
+    if not context.text_model:
+        raise ValueError("no text model configured or discovered")
+    beta_ns = _resolve_sdk_target(client, ("beta", "chat", "completions", "parse"))
+    if beta_ns is None:
+        raise ProbeFailure(
+            status="unavailable",
+            detail="client.beta.chat.completions.parse not found in SDK",
+        )
+    response = client.beta.chat.completions.parse(
+        model=context.text_model,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Return only JSON with status set to 'ok' and value set to 1."
+                ),
+            }
+        ],
+        temperature=0,
+        response_format=_build_json_schema_response_format("probe_payload"),
+    )
+    choices = _object_get(response, "choices")
+    if not isinstance(choices, list) or not choices:
+        raise ProbeFailure(
+            status="unavailable",
+            detail="beta.chat.completions.parse probe returned no choices",
+        )
+    message = _object_get(choices[0], "message")
+    raw_text = _object_get(message, "content")
+    if isinstance(raw_text, list):
+        raw_text = "".join(
+            str(_object_get(part, "text") or "")
+            for part in raw_text
+            if _object_get(part, "type") in {"text", "output_text"}
+        )
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise ProbeFailure(
+            status="unavailable",
+            detail="beta.chat.completions.parse probe returned no message content",
+        )
+    payload = _load_json_object(
+        raw_text.strip(),
+        source="beta.chat.completions.parse probe",
+    )
+    _validate_probe_payload(payload, source="beta.chat.completions.parse probe")
+    return 200, "returned schema-valid JSON payload via beta.parse"
+
+
 def _probe_chat_completions_tool_calls(
     client: Any, context: ProbeContext
 ) -> tuple[int | None, str]:
@@ -681,10 +739,11 @@ def _probe_audio_speech_create(
 
 
 # OpenAI docs show that Chat Completions and Responses can both support
-# structured outputs and function calling. `engllm-chat` currently uses Chat
-# Completions plus structured outputs only, so native tool calling and the
-# Responses API are reported as extra compatibility surface rather than runtime
-# prerequisites.
+# structured outputs and function calling. `engllm-chat` currently uses
+# ``client.beta.chat.completions.parse`` for Pydantic-validated structured
+# output plus ``client.models.list`` for model discovery. Native tool calling
+# and the Responses API are reported as extra compatibility surface rather than
+# runtime prerequisites.
 OPERATIONS: tuple[OperationSpec, ...] = (
     OperationSpec(
         name="models.list",
@@ -732,6 +791,14 @@ OPERATIONS: tuple[OperationSpec, ...] = (
         runtime_tier="required_for_engllm_chat",
         sdk_path=("chat", "completions", "create"),
         probe=_probe_chat_completions_structured_output,
+        cost="low-cost inference",
+    ),
+    OperationSpec(
+        name="beta.chat.completions.parse",
+        description="Beta Pydantic-validated structured output (used by engllm-chat)",
+        runtime_tier="required_for_engllm_chat",
+        sdk_path=("beta", "chat", "completions", "parse"),
+        probe=_probe_beta_chat_completions_parse,
         cost="low-cost inference",
     ),
     OperationSpec(

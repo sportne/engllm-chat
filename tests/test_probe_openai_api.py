@@ -307,6 +307,13 @@ def test_probe_individual_api_checks_cover_success_and_precondition_paths() -> N
         chat=SimpleNamespace(
             completions=SimpleNamespace(create=_record("chat.completions.create"))
         ),
+        beta=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    parse=_record("beta.chat.completions.parse")
+                )
+            )
+        ),
         embeddings=SimpleNamespace(create=_record("embeddings.create")),
         moderations=SimpleNamespace(create=_record("moderations.create")),
         files=SimpleNamespace(list=lambda: _IterablePage([1, 2])),
@@ -332,6 +339,9 @@ def test_probe_individual_api_checks_cover_success_and_precondition_paths() -> N
     )
     assert probe._probe_chat_completions_create(client, context)[0] == 200
     assert probe._probe_chat_completions_structured_output(client, context)[0] == 200
+    assert probe._probe_beta_chat_completions_parse(client, context)[1].startswith(
+        "returned schema-valid JSON payload via beta.parse"
+    )
     assert probe._probe_chat_completions_tool_calls(client, context)[0] == 200
     assert probe._probe_embeddings_create(client, context)[0] == 200
     assert probe._probe_moderations_create(client, context)[0] == 200
@@ -358,6 +368,7 @@ def test_probe_individual_api_checks_cover_success_and_precondition_paths() -> N
 
     assert any(name == "responses.create" for name, _kwargs in calls)
     assert any(name == "chat.completions.create" for name, _kwargs in calls)
+    assert any(name == "beta.chat.completions.parse" for name, _kwargs in calls)
 
 
 def test_probe_individual_api_checks_reject_unexpected_probe_payloads() -> None:
@@ -395,6 +406,28 @@ def test_probe_individual_api_checks_reject_unexpected_probe_payloads() -> None:
                     )
                 )
             ),
+            context,
+        )
+
+    # beta.chat.completions.parse — empty choices
+    with pytest.raises(probe.ProbeFailure, match="returned no choices"):
+        probe._probe_beta_chat_completions_parse(
+            SimpleNamespace(
+                beta=SimpleNamespace(
+                    chat=SimpleNamespace(
+                        completions=SimpleNamespace(
+                            parse=lambda **_kwargs: SimpleNamespace(choices=[])
+                        )
+                    )
+                )
+            ),
+            context,
+        )
+
+    # beta.chat.completions.parse — SDK surface missing
+    with pytest.raises(probe.ProbeFailure, match="not found in SDK"):
+        probe._probe_beta_chat_completions_parse(
+            SimpleNamespace(),
             context,
         )
 
