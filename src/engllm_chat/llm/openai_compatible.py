@@ -55,6 +55,27 @@ __all__ = [
 ]
 
 
+def _extract_model_ids(page: Any) -> list[str]:
+    """Normalize models.list() results into stable model ids."""
+
+    data = getattr(page, "data", None)
+    if isinstance(data, list):
+        items = data
+    else:
+        try:
+            items = list(page)
+        except Exception:
+            items = []
+
+    model_ids = {
+        model_id.strip()
+        for item in items
+        for model_id in [getattr(item, "id", None)]
+        if isinstance(model_id, str) and model_id.strip()
+    }
+    return sorted(model_ids)
+
+
 class OpenAICompatibleChatLLMClient:
     """Chat adapter for providers exposing an OpenAI-compatible API surface."""
 
@@ -117,6 +138,14 @@ class OpenAICompatibleChatLLMClient:
             model_name,
             json.dumps(payload, indent=2, sort_keys=True),
         )
+
+    def list_available_models(self) -> list[str]:
+        """Return discoverable model ids from the active endpoint."""
+
+        try:
+            return _extract_model_ids(self._client.models.list())
+        except Exception as exc:  # pragma: no cover - provider/network dependent
+            raise LLMError(f"{self._provider_name} models.list failed: {exc}") from exc
 
     def generate_chat_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
         """Send one non-streaming chat turn to an OpenAI-compatible provider."""

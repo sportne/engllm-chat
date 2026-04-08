@@ -183,6 +183,11 @@ class ChatScreen(Screen[None]):
         self._config = config
         self._llm_client = llm_client
         self._use_mock = mock_mode
+        self._active_model_name = getattr(
+            llm_client,
+            "model_name",
+            config.llm.model_name,
+        )
         self._credential_metadata_override = credential_metadata_override
         self._create_chat_llm_client = create_chat_llm_client
         self._session_state = ChatSessionState()
@@ -218,6 +223,7 @@ class ChatScreen(Screen[None]):
             "system",
             (
                 f"Root: {self._root_path}\n"
+                f"Model: {self._active_model_name}\n"
                 "Use /help for guidance. Type quit or exit to leave."
             ),
         )
@@ -324,11 +330,18 @@ class ChatScreen(Screen[None]):
             llm_client = self._llm_client
             if llm_client is None:
                 raise RuntimeError("Chat client is not configured.")
+            runtime_config = self._config.model_copy(
+                update={
+                    "llm": self._config.llm.model_copy(
+                        update={"model_name": self._active_model_name}
+                    )
+                }
+            )
             turn_stream = run_interactive_chat_session_turn(
                 user_message=user_message,
                 session_state=self._session_state,
                 root_path=self._root_path,
-                config=self._config,
+                config=runtime_config,
                 llm_client=llm_client,
             )
             self._active_runner = turn_stream

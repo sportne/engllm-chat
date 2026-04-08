@@ -266,6 +266,7 @@ def test_chat_app_launches_with_shell_layout_and_startup_message(
             assert "F6 copy transcript" in footer
             transcript_texts = _transcript_texts(app)
             assert any(str(tmp_path) in text for text in transcript_texts)
+            assert any("Model: mock-engllm" in text for text in transcript_texts)
             assert any("/help" in text for text in transcript_texts)
             assert any("quit or exit" in text for text in transcript_texts)
             app.exit()
@@ -689,6 +690,7 @@ def test_chat_app_inline_commands_blank_submit_and_no_stream_cancel_are_handled(
 
             transcript_texts = _transcript_texts(app)
             assert any("Ask grounded questions" in text for text in transcript_texts)
+            assert any("Use /model" in text for text in transcript_texts)
             assert exit_calls == [True]
 
             screen._cancel_active_turn(status_text="stopping")
@@ -1307,6 +1309,254 @@ def test_chat_app_transcript_copy_modal_supports_selection_and_copy(
             await pilot.click("#transcript-copy-close")
             await pilot.pause()
             assert isinstance(app.screen, ChatScreen)
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_model_command_lists_current_and_available_models(
+    tmp_path: Path,
+) -> None:
+    class _ListingMockClient(MockLLMClient):
+        def list_available_models(self) -> list[str]:
+            return ["qwen", "qwen-coder", "qwen-max"]
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=_ListingMockClient(model_name="qwen"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._submit_draft("/model")
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any("Current model: qwen" in text for text in transcript_texts)
+            assert any(
+                "Available models:\n- qwen\n- qwen-coder\n- qwen-max" in text
+                for text in transcript_texts
+            )
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_model_command_reports_listing_failures(tmp_path: Path) -> None:
+    class _FailingListingClient(MockLLMClient):
+        def list_available_models(self) -> list[str]:
+            raise LLMError("models.list is unavailable")
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=_FailingListingClient(model_name="qwen"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._submit_draft("/model")
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any("Current model: qwen" in text for text in transcript_texts)
+            assert any(
+                "Unable to list available models: models.list is unavailable" in text
+                for text in transcript_texts
+            )
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_model_command_switches_session_model_without_resetting_context(
+    tmp_path: Path,
+) -> None:
+    created_models: list[str] = []
+
+    def _fake_create_chat_llm_client(config, **kwargs):
+        del config
+        model_name = kwargs["model_name"]
+        assert isinstance(model_name, str)
+        created_models.append(model_name)
+        return MockLLMClient(model_name=model_name)
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(model_name="qwen"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            screen._create_chat_llm_client = _fake_create_chat_llm_client
+            session_state = ChatSessionState()
+            screen._session_state = session_state
+
+            screen._submit_draft("/model qwen-coder")
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any(
+                "Switched model from qwen to qwen-coder." in text
+                for text in transcript_texts
+            )
+            assert screen._active_model_name == "qwen-coder"
+            assert screen._session_state is session_state
+            assert isinstance(screen._llm_client, MockLLMClient)
+            assert screen._llm_client.model_name == "qwen-coder"
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+    assert created_models == ["qwen-coder"]
+
+
+def test_chat_app_model_command_failure_keeps_previous_model(tmp_path: Path) -> None:
+    def _failing_create_chat_llm_client(config, **kwargs):
+        del config, kwargs
+        raise LLMError("unknown model")
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(model_name="qwen"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            original_client = screen._llm_client
+            screen._create_chat_llm_client = _failing_create_chat_llm_client
+
+            screen._submit_draft("/model bad-model")
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any(
+                "Error: Unable to switch model to bad-model: unknown model" in text
+                for text in transcript_texts
+            )
+            assert screen._active_model_name == "qwen"
+            assert screen._llm_client is original_client
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_model_command_uses_mock_listing_in_mock_mode(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(model_name="mock-chat"),
+            mock_mode=True,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._submit_draft("/model")
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any("Current model: mock-chat" in text for text in transcript_texts)
+            assert any(
+                "Available models:\n- mock-chat" in text for text in transcript_texts
+            )
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_model_command_is_rejected_while_busy(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(model_name="qwen"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+            screen._busy = True
+            screen._active_runner = _FakeCancelableStream()  # type: ignore[assignment]
+
+            screen._submit_draft("/model qwen-coder")
+            await pilot.pause()
+
+            transcript_texts = _transcript_texts(app)
+            assert any(
+                "Stop the active turn before changing models." in text
+                for text in transcript_texts
+            )
+            assert screen._active_model_name == "qwen"
+            assert isinstance(screen._llm_client, MockLLMClient)
+            assert screen._llm_client.model_name == "qwen"
+            app.exit()
+            await pilot.pause()
+
+    asyncio.run(_run())
+
+
+def test_chat_app_next_turn_uses_switched_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_run_interactive_chat_session_turn(**kwargs):
+        captured["model_name"] = kwargs["config"].llm.model_name
+        captured["session_state"] = kwargs["session_state"]
+        return _GatedTurnStream(
+            result=_completed_result(
+                user_message=kwargs["user_message"],
+                answer="Done",
+            )
+        )
+
+    monkeypatch.setattr(
+        "engllm_chat.tools.chat.app.run_interactive_chat_session_turn",
+        _fake_run_interactive_chat_session_turn,
+    )
+
+    async def _run() -> None:
+        app = ChatApp(
+            root_path=tmp_path,
+            config=ChatConfig(),
+            llm_client=MockLLMClient(model_name="qwen"),
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ChatScreen)
+
+            screen._active_model_name = "qwen-coder"
+            session_state = ChatSessionState()
+            screen._session_state = session_state
+            screen._submit_draft("hello")
+            await pilot.pause()
+            await pilot.pause(0.06)
+
+            assert captured["model_name"] == "qwen-coder"
+            assert captured["session_state"] is session_state
             app.exit()
             await pilot.pause()
 

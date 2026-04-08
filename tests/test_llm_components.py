@@ -81,6 +81,7 @@ class _FakeOpenAIClient:
     last_init_kwargs: dict[str, object] | None = None
     queued_parse_responses: list[object] = []
     captured_parse_payloads: list[dict[str, object]] = []
+    queued_model_pages: list[object] = []
 
     def __init__(self, **kwargs: object) -> None:
         type(self).last_init_kwargs = dict(kwargs)
@@ -113,12 +114,18 @@ class _FakeOpenAIClient:
                 )()
             },
         )()
+        self.models = type(
+            "_ModelsNamespace",
+            (),
+            {"list": self._list_models},
+        )()
 
     @classmethod
     def reset(cls) -> None:
         cls.last_init_kwargs = None
         cls.queued_parse_responses = []
         cls.captured_parse_payloads = []
+        cls.queued_model_pages = []
 
     def _unexpected_create(self, **payload: object) -> object:
         del payload
@@ -129,6 +136,11 @@ class _FakeOpenAIClient:
         if not type(self).queued_parse_responses:
             raise AssertionError("No queued fake parsed response")
         return type(self).queued_parse_responses.pop(0)
+
+    def _list_models(self) -> object:
+        if not type(self).queued_model_pages:
+            raise AssertionError("No queued fake models.list page")
+        return type(self).queued_model_pages.pop(0)
 
 
 def test_validate_payload_and_json_text() -> None:
@@ -182,6 +194,12 @@ def test_mock_client_supports_chat_turns() -> None:
         )
     )
     assert turn.finish_reason == "tool_calls"
+
+
+def test_mock_client_lists_its_active_model() -> None:
+    client = MockLLMClient(model_name="mock-chat")
+
+    assert client.list_available_models() == ["mock-chat"]
 
 
 def test_create_chat_llm_client_supports_mock_and_openai_compatible() -> None:
@@ -288,6 +306,60 @@ def test_openai_compatible_client_requires_sdk_dependencies(
             api_key="secret",
             base_url="https://api.openai.com/v1",
         )
+
+
+def test_openai_compatible_client_lists_available_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_model_pages = [
+        type(
+            "_ModelPage",
+            (),
+            {
+                "data": [
+                    type("_Model", (), {"id": "z-model"})(),
+                    type("_Model", (), {"id": "a-model"})(),
+                    type("_Model", (), {"id": "a-model"})(),
+                ]
+            },
+        )()
+    ]
+
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+
+    assert client.list_available_models() == ["a-model", "z-model"]
+
+
+def test_openai_compatible_client_surfaces_model_listing_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+
+    class _FailingModelsClient(_FakeOpenAIClient):
+        def _list_models(self) -> object:
+            raise RuntimeError("models disabled")
+
+    monkeypatch.setattr(
+        "engllm_chat.llm.openai_compatible.OpenAI", _FailingModelsClient
+    )
+    client = OpenAICompatibleChatLLMClient(
+        model_name="gpt-test",
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="https://api.openai.com/v1",
+    )
+
+    with pytest.raises(LLMError, match="models.list failed: models disabled"):
+        client.list_available_models()
 
 
 def test_openai_compatible_generate_chat_turn_parses_final_response(

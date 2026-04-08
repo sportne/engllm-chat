@@ -108,6 +108,9 @@ class ChatLLMClient(Protocol):
     ) -> ChatTurnResponse:
         """Generate one complete non-streaming chat turn result."""
 
+    def list_available_models(self) -> list[str]:
+        """Return the model ids discoverable for this client."""
+
 
 def validate_payload(
     response_model: type[BaseModel],

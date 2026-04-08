@@ -231,6 +231,78 @@ class ChatScreenController:
     def clear_composer(self) -> None:
         self._screen.query_one("#composer", ComposerTextArea).load_text("")
 
+    def _describe_active_model(self) -> str:
+        return f"Current model: {self._screen._active_model_name}"
+
+    def _show_available_models(self) -> None:
+        llm_client = self._screen._llm_client
+        if llm_client is None:
+            self.append_transcript(
+                "system",
+                f"{self._describe_active_model()}\nClient is not configured yet.",
+            )
+            return
+        try:
+            model_ids = llm_client.list_available_models()
+        except Exception as exc:
+            self.append_transcript(
+                "system",
+                f"{self._describe_active_model()}\nUnable to list available models: {exc}",
+            )
+            return
+        if not model_ids:
+            self.append_transcript(
+                "system",
+                f"{self._describe_active_model()}\nNo models were returned by models.list.",
+            )
+            return
+        available = "\n".join(f"- {model_id}" for model_id in model_ids)
+        self.append_transcript(
+            "system",
+            f"{self._describe_active_model()}\nAvailable models:\n{available}",
+        )
+
+    def _switch_active_model(self, new_model_name: str) -> None:
+        if self._screen._busy:
+            self.append_transcript(
+                "system",
+                "Stop the active turn before changing models.",
+            )
+            return
+        cleaned_model_name = new_model_name.strip()
+        if not cleaned_model_name:
+            self._show_available_models()
+            return
+        if cleaned_model_name == self._screen._active_model_name:
+            self.append_transcript(
+                "system",
+                f"Current model: {self._screen._active_model_name}",
+            )
+            return
+        previous_model_name = self._screen._active_model_name
+        try:
+            next_client = self._screen._create_chat_llm_client(
+                self._screen._config.llm,
+                use_mock=self._screen._use_mock,
+                model_name=cleaned_model_name,
+                api_base_url=self._screen._config.llm.api_base_url,
+                timeout_seconds=self._screen._config.llm.timeout_seconds,
+                api_key=self._screen._credential_secret,
+                verbose_llm_logging=self._screen._config.llm.verbose_llm_logging,
+            )
+        except Exception as exc:
+            self.append_transcript(
+                "error",
+                f"Unable to switch model to {cleaned_model_name}: {exc}",
+            )
+            return
+        self._screen._llm_client = next_client
+        self._screen._active_model_name = cleaned_model_name
+        self.append_transcript(
+            "system",
+            f"Switched model from {previous_model_name} to {cleaned_model_name}.",
+        )
+
     def handle_credential_submit(self, secret_value: str | None) -> None:
         self._screen._credential_secret = secret_value or None
         self._screen._credential_prompt_completed = True
@@ -344,9 +416,14 @@ class ChatScreenController:
             self.append_transcript(
                 "system",
                 "Ask grounded questions about the selected root. "
+                "Use /model to inspect or switch models. "
                 "Use /copy to open a selectable transcript view. "
                 "Use quit or exit to leave.",
             )
+            return True
+        if normalized.startswith("/model"):
+            parts = user_message.strip().split(maxsplit=1)
+            self._switch_active_model(parts[1] if len(parts) > 1 else "")
             return True
         if normalized == "/copy":
             self.open_transcript_copy()
@@ -378,6 +455,12 @@ class ChatScreenController:
         if not raw_draft.strip():
             return
         if self._screen._busy:
+            if raw_draft.strip().lower().startswith("/model"):
+                self.append_transcript(
+                    "system",
+                    "Stop the active turn before changing models.",
+                )
+                return
             self._screen.app.push_screen(
                 InterruptConfirmModal(),
                 callback=self.handle_interrupt_confirmation,

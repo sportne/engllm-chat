@@ -150,3 +150,8 @@ class MockLLMClient:
             raw_text=raw_text,
             finish_reason="final_response",
         )
+
+    def list_available_models(self) -> list[str]:
+        """Expose the mock model as the only available local option."""
+
+        return [self.model_name]
