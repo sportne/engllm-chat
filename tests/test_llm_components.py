@@ -222,7 +222,7 @@ def test_create_chat_llm_client_supports_mock_and_openai_compatible() -> None:
         assert isinstance(compatible_client, OpenAICompatibleChatLLMClient)
         assert _FakeOpenAIClient.last_init_kwargs == {
             "api_key": "secret",
-            "base_url": "http://localhost:11434/v1",
+            "base_url": "http://localhost:11434/v1/",
             "timeout": 12.0,
         }
 
@@ -256,7 +256,7 @@ def test_create_chat_llm_client_supports_explicit_openai_compatible_endpoints(
     assert isinstance(client, OpenAICompatibleChatLLMClient)
     assert _FakeOpenAIClient.last_init_kwargs == {
         "api_key": "test-token",
-        "base_url": base_url,
+        "base_url": base_url if base_url.endswith("/") else base_url + "/",
         "timeout": 12.0,
     }
 
@@ -275,7 +275,7 @@ def test_create_chat_llm_client_supports_hosted_base_url_override(
 
     assert isinstance(client, OpenAICompatibleChatLLMClient)
     assert _FakeOpenAIClient.last_init_kwargs is not None
-    assert _FakeOpenAIClient.last_init_kwargs["base_url"] == "https://proxy.example/v1"
+    assert _FakeOpenAIClient.last_init_kwargs["base_url"] == "https://proxy.example/v1/"
 
 
 def test_openai_compatible_client_requires_configured_api_key(
@@ -609,7 +609,7 @@ def test_openai_compatible_generate_chat_turn_preserves_explicit_local_base_url(
         provider_name="openai-compatible",
         api_key_env_var="ENGLLM_CHAT_API_KEY",
         api_key="secret",
-        base_url="http://localhost:11434/custom",
+        base_url="http://localhost:11434/custom/",
     )
     response = client.generate_chat_turn(
         ChatTurnRequest(
@@ -636,7 +636,7 @@ def test_openai_compatible_generate_chat_turn_preserves_explicit_local_base_url(
     assert _FakeOpenAIClient.last_init_kwargs is not None
     assert (
         _FakeOpenAIClient.last_init_kwargs["base_url"]
-        == "http://localhost:11434/custom"
+        == "http://localhost:11434/custom/"
     )
     assert _FakeOpenAIClient.last_init_kwargs["api_key"] == "secret"
     assert (

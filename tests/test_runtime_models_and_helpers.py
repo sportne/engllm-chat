@@ -301,7 +301,7 @@ def test_openai_compatible_client_uses_explicit_local_endpoint(
     assert response.final_response == ChatFinalResponse(answer="Done")
     assert _FakeOpenAIClient.last_init_kwargs == {
         "api_key": "secret",
-        "base_url": "http://localhost:11434/custom",
+        "base_url": "http://localhost:11434/custom/",
         "timeout": 60.0,
     }
     assert (

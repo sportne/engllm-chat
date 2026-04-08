@@ -45,7 +45,7 @@ def test_transport_helpers_cover_token_resolution_and_client_creation(
     )
     assert client.kwargs == {
         "api_key": "from-env",
-        "base_url": "https://api.openai.com/v1",
+        "base_url": "https://api.openai.com/v1/",
         "timeout": 12.0,
     }
 

@@ -52,7 +52,7 @@ def build_openai_client(
         api_key_env_var=api_key_env_var,
         api_key=api_key,
     )
-    
+
     if not api_token:
         # The underlying OpenAI library strictly requires a truthy api_key string.
         # So we supply a placeholder for local endpoints (like Ollama) that ignore it.
