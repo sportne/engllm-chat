@@ -29,6 +29,7 @@ from engllm_chat.llm._openai_compatible.retries import (
 )
 from engllm_chat.llm._openai_compatible.serialization import (
     _build_chat_turn_action_model,
+    _build_json_schema_response_format,
     _serialize_chat_message,
 )
 from engllm_chat.llm._openai_compatible.transport import (
@@ -46,6 +47,7 @@ __all__ = [
     "ChatToolDefinition",
     "_serialize_chat_message",
     "_build_chat_turn_action_model",
+    "_build_json_schema_response_format",
     "_extract_message_text",
     "_extract_action",
     "_extract_token_usage",
@@ -88,10 +90,12 @@ class OpenAICompatibleChatLLMClient:
         timeout_seconds: float = 60.0,
         api_key: str | None = None,
         verbose_logging: bool = False,
+        use_beta_parse: bool = True,
     ) -> None:
         self._model_name = model_name
         self._provider_name = provider_name
         self._verbose_logging = verbose_logging
+        self._use_beta_parse = use_beta_parse
         self._client = build_openai_client(
             openai_client_class=OpenAI,
             provider_name=provider_name,
@@ -170,15 +174,23 @@ class OpenAICompatibleChatLLMClient:
                 "model": request.model_name or self._model_name,
                 "messages": serialized_messages,
                 "temperature": request.temperature,
-                "response_format": action_response_model,
             }
+            if self._use_beta_parse:
+                payload["response_format"] = action_response_model
+            else:
+                payload["response_format"] = _build_json_schema_response_format(
+                    action_response_model
+                )
             self._log_request_messages(
                 model_name=str(payload["model"]),
                 attempt_index=attempt_index,
                 messages=serialized_messages,
             )
             try:
-                response = self._client.beta.chat.completions.parse(**payload)
+                if self._use_beta_parse:
+                    response = self._client.beta.chat.completions.parse(**payload)
+                else:
+                    response = self._client.chat.completions.create(**payload)
             except PydanticValidationError as exc:
                 last_schema_error = exc
                 if attempt_index + 1 >= _MAX_SCHEMA_ATTEMPTS:

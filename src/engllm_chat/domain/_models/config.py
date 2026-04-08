@@ -33,6 +33,7 @@ class ChatLLMConfig(DomainModel):
     timeout_seconds: float = 60.0
     prompt_for_api_key_if_missing: bool = True
     verbose_llm_logging: bool = False
+    use_beta_parse: bool = True
 
     @field_validator("model_name")
     @classmethod

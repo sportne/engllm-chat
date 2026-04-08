@@ -81,6 +81,8 @@ class _FakeOpenAIClient:
     last_init_kwargs: dict[str, object] | None = None
     queued_parse_responses: list[object] = []
     captured_parse_payloads: list[dict[str, object]] = []
+    queued_create_responses: list[object] = []
+    captured_create_payloads: list[dict[str, object]] = []
     queued_model_pages: list[object] = []
 
     def __init__(self, **kwargs: object) -> None:
@@ -110,7 +112,7 @@ class _FakeOpenAIClient:
                 "completions": type(
                     "_CompletionsNamespace",
                     (),
-                    {"create": self._unexpected_create},
+                    {"create": self._create},
                 )()
             },
         )()
@@ -125,11 +127,15 @@ class _FakeOpenAIClient:
         cls.last_init_kwargs = None
         cls.queued_parse_responses = []
         cls.captured_parse_payloads = []
+        cls.queued_create_responses = []
+        cls.captured_create_payloads = []
         cls.queued_model_pages = []
 
-    def _unexpected_create(self, **payload: object) -> object:
-        del payload
-        raise AssertionError("Raw chat.completions.create should not be used")
+    def _create(self, **payload: object) -> object:
+        type(self).captured_create_payloads.append(dict(payload))
+        if not type(self).queued_create_responses:
+            raise AssertionError("No queued fake create response")
+        return type(self).queued_create_responses.pop(0)
 
     def _parse(self, **payload: object) -> object:
         type(self).captured_parse_payloads.append(dict(payload))
@@ -691,6 +697,50 @@ def test_openai_compatible_generate_chat_turn_parses_tool_calls_for_local_endpoi
 
     assert response.finish_reason == "tool_calls"
     assert response.tool_calls[0].tool_name == "list_directory"
+
+
+def test_openai_compatible_generate_chat_turn_no_beta_parse_uses_create(
+    monkeypatch,
+) -> None:
+    """When use_beta_parse=False, generate_chat_turn uses chat.completions.create."""
+    monkeypatch.setattr("engllm_chat.llm.openai_compatible.OpenAI", _FakeOpenAIClient)
+    _FakeOpenAIClient.reset()
+    _FakeOpenAIClient.queued_create_responses = [
+        _FakeChatCompletionResponse(
+            message=_FakeMessage(
+                content='{"action": {"kind": "final_response", "response": {"answer": "hi"}}}',
+                parsed=None,
+            ),
+            usage=_FakeUsage(prompt_tokens=5, completion_tokens=8, total_tokens=13),
+        )
+    ]
+    client = OpenAICompatibleChatLLMClient(
+        model_name="qwen",
+        provider_name="openai-compatible",
+        api_key_env_var="ENGLLM_CHAT_API_KEY",
+        api_key="secret",
+        base_url="http://localhost:11434/v1",
+        use_beta_parse=False,
+    )
+    response = client.generate_chat_turn(
+        ChatTurnRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            response_model=ChatFinalResponse,
+            model_name="qwen",
+        )
+    )
+
+    assert response.finish_reason == "final_response"
+    assert response.final_response == ChatFinalResponse(answer="hi")
+    assert response.token_usage is not None
+    assert response.token_usage.total_tokens == 13
+    # Verify create was called, not parse
+    assert len(_FakeOpenAIClient.captured_create_payloads) == 1
+    assert len(_FakeOpenAIClient.captured_parse_payloads) == 0
+    # Verify response_format is a dict (json_schema), not a Pydantic model
+    rf = _FakeOpenAIClient.captured_create_payloads[0]["response_format"]
+    assert isinstance(rf, dict)
+    assert rf["type"] == "json_schema"
 
 
 def test_openai_compatible_generate_chat_turn_retries_after_schema_failure(

@@ -30,6 +30,7 @@ def test_load_chat_config_defaults(tmp_path: Path) -> None:
     assert config.llm.model_name == "qwen2.5-coder:7b-instruct-q4_K_M"
     assert config.llm.api_base_url is None
     assert config.llm.verbose_llm_logging is False
+    assert config.llm.use_beta_parse is True
     assert config.source_filters.include == []
     assert config.source_filters.exclude == []
     assert config.source_filters.include_hidden is False
@@ -89,6 +90,15 @@ def test_chat_llm_config_keeps_explicit_api_base_url_and_logging_flag() -> None:
     assert config.api_base_url == "https://example.test/v1"
     assert config.credential_prompt_metadata().api_key_env_var == "ENGLLM_CHAT_API_KEY"
     assert config.verbose_llm_logging is True
+
+
+def test_chat_llm_config_accepts_use_beta_parse_false() -> None:
+    config = ChatLLMConfig(
+        model_name="qwen",
+        use_beta_parse=False,
+    )
+
+    assert config.use_beta_parse is False
 
 
 def test_load_chat_config_rejects_validation_errors(tmp_path: Path) -> None:

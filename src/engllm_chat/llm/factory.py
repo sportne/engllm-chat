@@ -49,4 +49,5 @@ def create_chat_llm_client(
         timeout_seconds=resolved_timeout,
         api_key=api_key,
         verbose_logging=resolved_verbose_logging,
+        use_beta_parse=config.use_beta_parse,
     )

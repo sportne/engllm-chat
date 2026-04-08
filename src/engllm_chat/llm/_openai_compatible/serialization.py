@@ -82,3 +82,25 @@ def _build_chat_turn_action_model(
         f"{response_model.__name__}ChatTurnActionEnvelope",
         action=(action_field_type, ...),
     )
+
+
+def _build_json_schema_response_format(
+    model: type[BaseModel],
+) -> dict[str, object]:
+    """Convert a Pydantic model into the ``response_format`` dict for ``chat.completions.create``.
+
+    The returned dict has the shape::
+
+        {"type": "json_schema", "json_schema": {"name": "<ModelName>", "schema": {...}}}
+
+    This is the format that OpenAI-compatible endpoints accept when the caller
+    is not using the beta ``parse`` helper (which accepts a raw Pydantic class
+    instead).
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": model.__name__,
+            "schema": model.model_json_schema(),
+        },
+    }

@@ -83,6 +83,8 @@ def _resolve_chat_config(args: argparse.Namespace) -> ChatConfig:
         raw["llm"]["api_base_url"] = args.api_base_url
     if args.verbose_llm:
         raw["llm"]["verbose_llm_logging"] = True
+    if args.no_beta_parse:
+        raw["llm"]["use_beta_parse"] = False
 
     session_overrides = {
         "max_context_tokens": args.max_context_tokens,
@@ -176,6 +178,15 @@ def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--api-base-url", type=str)
     parser.add_argument("--verbose-llm", action="store_true")
+    parser.add_argument(
+        "--no-beta-parse",
+        action="store_true",
+        help=(
+            "Use chat.completions.create with response_format instead of "
+            "beta.chat.completions.parse. Useful for providers that lack "
+            "the beta namespace (e.g. some Ollama versions)."
+        ),
+    )
     parser.add_argument("--max-context-tokens", type=int)
     parser.add_argument("--max-tool-round-trips", type=int)
     parser.add_argument("--max-tool-calls-per-round", type=int)
